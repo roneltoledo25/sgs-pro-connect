@@ -820,18 +820,33 @@ def page_student_record_teacher_view():
         else: st.error("Not found.")
 
 def display_academic_transcript(df):
+    # Create the pivot table
     pivot = df.pivot_table(index=['school_year', 'subject'], columns='quarter', values='total_score', aggfunc='first').reset_index()
+    
+    # Ensure all quarters exist
     for q in ['Q1', 'Q2', 'Q3', 'Q4']:
         if q not in pivot.columns: pivot[q] = 0.0
+    
+    # Calculate Semesters
     pivot['Sem 1'] = pivot['Q1'].fillna(0) + pivot['Q2'].fillna(0)
     pivot['Sem 2'] = pivot['Q3'].fillna(0) + pivot['Q4'].fillna(0)
+    
+    # Calculate GPAs
     pivot['GPA S1'] = pivot['Sem 1'].apply(get_grade_point)
     pivot['GPA S2'] = pivot['Sem 2'].apply(get_grade_point)
+
+    # Display per year
     for yr in pivot['school_year'].unique():
         st.markdown(f"#### 🗓️ {yr}")
+        # Filter for the specific year
         d = pivot[pivot['school_year'] == yr][['subject', 'Q1', 'Q2', 'Sem 1', 'GPA S1', 'Q3', 'Q4', 'Sem 2', 'GPA S2']]
-        d.columns = ['Subject', 'Q1 (50)', 'Q2 (50)', 'Sem 1', 'Grade', 'Q3 (50)', 'Q4 (50)', 'Sem 2', 'Grade']
+        
+        # --- THE FIX IS HERE (Unique Names) ---
+        d.columns = ['Subject', 'Q1 (50)', 'Q2 (50)', 'Sem 1 Total', 'S1 Grade', 'Q3 (50)', 'Q4 (50)', 'Sem 2 Total', 'S2 Grade']
+        
+        # Show the table
         st.dataframe(d.style.format(precision=1), hide_index=True, width="stretch")
+
 
 def page_student_portal_grades():
     s_data = st.session_state.user
