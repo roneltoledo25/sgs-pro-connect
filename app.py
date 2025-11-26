@@ -40,13 +40,17 @@ SHEET_NAME = "SGS_Database"
 SCHOOL_CODE = "SK2025"
 STUDENT_STATUSES = ["Active", "Transferred", "Dropped Out"]
 
-# --- GOOGLE SHEETS CONNECTION ---
-# Cache the connection so it doesn't reload on every button click
+# --- GOOGLE SHEETS CONNECTION (SECURE VERSION) ---
 @st.cache_resource
 def get_db_connection():
     scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
-    # Look for the secret file
-    creds = ServiceAccountCredentials.from_json_keyfile_name("service_account.json", scope)
+    
+    # Create a dictionary from the Streamlit Secrets
+    # We use st.secrets["gcp_service_account"] to get the data we pasted in the dashboard
+    creds_dict = dict(st.secrets["gcp_service_account"])
+    
+    # Use the dictionary method instead of the filename method
+    creds = ServiceAccountCredentials.from_json_keyfile_dict(creds_dict, scope)
     client = gspread.authorize(creds)
     sheet = client.open(SHEET_NAME)
     return sheet
