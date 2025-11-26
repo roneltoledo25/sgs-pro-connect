@@ -1,5 +1,5 @@
 streamlit
 pandas
-Pillow
-sqlalchemy
-psycopg2-binary
+gspread
+oauth2client
+st-annotated-text
