@@ -1,5 +1,7 @@
 streamlit
 pandas
-Pillow
 gspread
 oauth2client
+Pillow
+openpyxl
+xlsxwriter
