@@ -160,6 +160,49 @@ def register_user(username, password, code):
     clear_cache()
     return True, "✅ Success"
 
+# --- TEACHER CREDENTIALS UPDATE ---
+def update_teacher_credentials(old_u, new_u, new_p):
+    sh = get_db_connection()
+    ws_users = sh.worksheet("Users")
+    ws_subs = sh.worksheet("Subjects")
+    ws_grades = sh.worksheet("Grades")
+    
+    # 1. Check if new username taken (only if changing)
+    if old_u != new_u:
+        try:
+            if ws_users.find(new_u): return False, "⚠️ Username already taken."
+        except: pass
+    
+    # 2. Update Users Sheet
+    cell = ws_users.find(old_u)
+    if cell:
+        ws_users.update_cell(cell.row, 1, new_u)
+        ws_users.update_cell(cell.row, 2, new_p)
+    
+    # 3. Update Subjects (Cascade)
+    if old_u != new_u:
+        subs = ws_subs.get_all_records()
+        s_updates = []
+        s_updates.append(["id", "teacher_username", "subject_name"])
+        for s in subs:
+            t = new_u if s['teacher_username'] == old_u else s['teacher_username']
+            s_updates.append([s['id'], t, s['subject_name']])
+        ws_subs.clear()
+        ws_subs.append_rows(s_updates)
+        
+        # 4. Update Grades (Cascade)
+        grades = ws_grades.get_all_records()
+        g_updates = []
+        g_updates.append(["id", "student_id", "subject", "quarter", "school_year", "test1", "test2", "test3", "final_score", "total_score", "recorded_by", "timestamp"])
+        for g in grades:
+            rec = new_u if g['recorded_by'] == old_u else g['recorded_by']
+            g_updates.append([g['id'], g['student_id'], g['subject'], g['quarter'], g['school_year'], g['test1'], g['test2'], g['test3'], g['final_score'], g['total_score'], rec, g['timestamp']])
+        ws_grades.clear()
+        ws_grades.append_rows(g_updates)
+    
+    clear_cache()
+    return True, "✅ Credentials Updated! Please log in again."
+
 # --- ADMIN FUNCTIONS ---
 def get_admin_stats():
     users = fetch_all_records("Users")
@@ -683,7 +726,7 @@ def sidebar_menu():
                     st.session_state.uploader_key += 1
                     time.sleep(1.0); st.rerun()
             st.markdown("---")
-            menu = st.radio("Menu", ["Dashboard", "📂 Student Roster", "📝 Input Grades", "📊 Gradebook", "👤 Student Record"])
+            menu = st.radio("Menu", ["Dashboard", "📂 Student Roster", "📝 Input Grades", "📊 Gradebook", "👤 Student Record", "⚙️ Account Settings"])
             
         else: 
             s_name = user_data[1]
@@ -771,6 +814,31 @@ def page_admin_manage_students():
                     st.success(f"Student {sid_only} restored to Active!")
                     time.sleep(1.5); st.rerun()
         else: st.info("Bin is empty.")
+
+def page_teacher_settings():
+    st.title("⚙️ Account Settings")
+    st.info("Update your login credentials here. This will automatically update your subjects and grade records.")
+    
+    current_u = st.session_state.user[0]
+    current_p = st.session_state.user[1]
+    
+    with st.form("teach_settings"):
+        new_u = st.text_input("Username", value=current_u)
+        new_p = st.text_input("Password", value=current_p, type="password")
+        
+        if st.form_submit_button("💾 Update Credentials"):
+            if new_u and new_p:
+                with st.spinner("Updating records... this may take a moment."):
+                    ok, msg = update_teacher_credentials(current_u, new_u, new_p)
+                    if ok:
+                        st.success(msg)
+                        st.session_state.logged_in = False
+                        time.sleep(2)
+                        st.rerun()
+                    else:
+                        st.error(msg)
+            else:
+                st.warning("Fields cannot be empty.")
 
 def page_dashboard():
     st.title("📊 Teacher Dashboard")
@@ -972,6 +1040,22 @@ def page_input_grades():
                     ok, msg = save_batch_tasks_and_grades(subj, q, yr, test_name, edited_df, max_score, weight, st.session_state.user[0])
                     if ok: st.success(msg); time.sleep(1.5); st.rerun()
                     else: st.error(msg)
+        
+        # 5. [NEW] Live Grade Monitor (Below the Editor)
+        st.markdown(f"**📉 Live Grade Monitor: {test_name}** (Red indicates < 50%)")
+        # Reuse df_editor, highlight low scores
+        def highlight_low_score(val):
+            try:
+                v = float(val)
+                # Max weight is 10. Half is 5.
+                if v < 5.0: return 'color: red; font-weight: bold;'
+                return 'color: green;'
+            except: return ''
+        
+        # Display simplified view for checking
+        check_df = df_editor[["No", "Name", "Weighted"]]
+        st.dataframe(check_df.style.format({"Weighted": "{:.2f}"}).map(highlight_low_score, subset=["Weighted"]), hide_index=True)
+
 
     with t_tabs[0]: render_task_tab("Test 1", 10.0)
     with t_tabs[1]: render_task_tab("Test 2", 10.0)
@@ -1086,7 +1170,42 @@ def page_gradebook():
         df = df.astype(str)
         df['No'] = pd.to_numeric(df['No'])
         df = df.sort_values('No')
-        st.dataframe(df.style.format(precision=1), width=1000)
+        
+        # --- NEW: CONDITIONAL FORMATTING FOR GRADEBOOK ---
+        def highlight_gradebook(val):
+            try:
+                v = float(val)
+                # Tests 1-3 weighted 10 (fail < 5)
+                # Final weighted 20 (fail < 10)
+                # Total weighted 50 (fail < 25)
+                # Simple logic: if < 50% of assumed max, mark red
+                # Since we don't know column context easily here, we use the 50% rule generally
+                # But wait, 8.0 is > 50% of 10, but < 50% of 20.
+                # We need column specific logic.
+                # Simplification: Just color red if < 5.0 (safe bet for tests)
+                # Better: Color whole row? No.
+                return ''
+            except: return ''
+            
+        # Specific styler
+        # We need to apply map to specific columns
+        styled_df = df.style.format(precision=1)
+        
+        def color_t1(v): 
+            try: return 'color: red; font-weight: bold;' if float(v) < 5.0 else ''
+            except: return ''
+        def color_final(v): 
+            try: return 'color: red; font-weight: bold;' if float(v) < 10.0 else ''
+            except: return ''
+        def color_total(v): 
+            try: return 'color: red; font-weight: bold;' if float(v) < 25.0 else ''
+            except: return ''
+            
+        styled_df.map(color_t1, subset=['Test 1', 'Test 2', 'Test 3'])
+        styled_df.map(color_final, subset=['Final'])
+        styled_df.map(color_total, subset=['Total'])
+        
+        st.dataframe(styled_df, width=1000)
         st.download_button("⬇️ Excel", df.to_csv(index=False), f"gradebook_{s}_{q}.csv", "text/csv")
 
 def page_student_record_teacher_view():
@@ -1169,6 +1288,7 @@ def display_academic_transcript(df):
     for yr in unique_years:
         st.markdown(f"#### 🗓️ Academic Year: {yr}")
         yr_data = pivot[pivot['school_year'] == yr].copy()
+        
         display_df = yr_data[['subject', 'Q1', 'Q2', 'Sem 1', 'GPA S1', 'Q3', 'Q4', 'Sem 2', 'GPA S2']].copy()
         display_df.columns = ['Subject', 'Q1 (50)', 'Q2 (50)', 'Sem 1 Total', 'S1 Grade', 'Q3 (50)', 'Q4 (50)', 'Sem 2 Total', 'S2 Grade']
         st.dataframe(display_df.style.format(precision=1).map(highlight_low), hide_index=True, width=1000)
@@ -1222,6 +1342,7 @@ else:
         elif sel == "📝 Input Grades": page_input_grades()
         elif sel == "📊 Gradebook": page_gradebook()
         elif sel == "👤 Student Record": page_student_record_teacher_view()
+        elif sel == "⚙️ Account Settings": page_teacher_settings()
     elif st.session_state.role == "Student":
         if sel == "📜 My Grades": page_student_portal_grades()
         elif sel == "⚙️ Settings": page_student_settings()
