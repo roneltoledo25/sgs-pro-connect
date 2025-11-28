@@ -58,7 +58,6 @@ def init_db():
     try:
         sh = get_db_connection()
         existing_titles = [w.title for w in sh.worksheets()]
-        
         if "Users" not in existing_titles:
             ws = sh.add_worksheet("Users", 100, 10)
             ws.append_row(["username", "password", "role", "profile_pic"])
@@ -72,12 +71,9 @@ def init_db():
         if "Grades" not in existing_titles:
             ws = sh.add_worksheet("Grades", 100, 15)
             ws.append_row(["id", "student_id", "subject", "quarter", "school_year", "test1", "test2", "test3", "final_score", "total_score", "recorded_by", "timestamp"])
-        
-        # NEW: Tasks Sheet for detailed breakdown
         if "Tasks" not in existing_titles:
             ws = sh.add_worksheet("Tasks", 100, 12)
             ws.append_row(["uid", "student_id", "subject", "quarter", "school_year", "test_name", "t1", "t2", "t3", "t4", "t5", "raw_total"])
-
     except Exception as e:
         st.error(f"DB Init Error: {e}")
 
@@ -464,10 +460,7 @@ def update_subject(sub_id, new_name):
             return True
     return False
 
-# --- NEW: TASKS & BATCH SAVE LOGIC ---
-
 def fetch_task_records(subject, quarter, year, test_name):
-    # Get all tasks for this specific assignment
     records = fetch_all_records("Tasks")
     res = {}
     for r in records:
@@ -479,24 +472,17 @@ def save_batch_tasks_and_grades(subject, quarter, year, test_name, task_df, max_
     sh = get_db_connection()
     ws_tasks = sh.worksheet("Tasks")
     ws_grades = sh.worksheet("Grades")
-    
-    # 1. Prepare Task Data Updates
-    # We will DELETE existing tasks for this specific batch to avoid complex row-finding
-    # (A bit inefficient but safe for data integrity)
     all_tasks = ws_tasks.get_all_records()
-    # Filter OUT the ones we are about to replace
     keep_tasks = []
     for t in all_tasks:
         if not (t['subject'] == subject and t['quarter'] == quarter and t['school_year'] == year and t['test_name'] == test_name):
             keep_tasks.append(t)
     
-    # Add NEW tasks from editor
     new_task_rows = []
-    grade_updates = {} # Map student_id -> new_weighted_score
+    grade_updates = {}
     
     for idx, row in task_df.iterrows():
         sid = str(row['ID'])
-        # Tasks 1-5
         t1 = float(row.get('Task 1', 0))
         t2 = float(row.get('Task 2', 0))
         t3 = float(row.get('Task 3', 0))
@@ -504,64 +490,44 @@ def save_batch_tasks_and_grades(subject, quarter, year, test_name, task_df, max_
         t5 = float(row.get('Task 5', 0))
         raw_total = t1+t2+t3+t4+t5
         
-        # Calculate Weighted
         weighted = 0.0
         if max_score > 0:
             weighted = (raw_total / max_score) * weight
             if weighted > weight: weighted = weight
             
         grade_updates[sid] = weighted
-        
-        # Add to Task Sheet List
         uid = f"{sid}_{subject}_{quarter}_{year}_{test_name}"
         new_task_rows.append([uid, sid, subject, quarter, year, test_name, t1, t2, t3, t4, t5, raw_total])
 
-    # WRITE TASKS
-    # Re-construct full list
     final_task_data = []
     final_task_data.append(["uid", "student_id", "subject", "quarter", "school_year", "test_name", "t1", "t2", "t3", "t4", "t5", "raw_total"])
-    # Add kept rows
-    for k in keep_tasks:
-        final_task_data.append(list(k.values()))
-    # Add new rows
+    for k in keep_tasks: final_task_data.append(list(k.values()))
     final_task_data.extend(new_task_rows)
     
     ws_tasks.clear()
     ws_tasks.append_rows(final_task_data)
     
-    # 2. Update GRADES Sheet
-    # Fetch all grades, update in memory, write back
     all_grades = ws_grades.get_all_records()
-    
-    # Create a map for existing rows
-    # key: sid_subj_q_yr -> row_index (in python list)
-    
-    # We will rebuild the grades list
     updated_grades = []
     updated_grades.append(["id", "student_id", "subject", "quarter", "school_year", "test1", "test2", "test3", "final_score", "total_score", "recorded_by", "timestamp"])
-    
     processed_sids = []
     
     for g in all_grades:
         if g['subject'] == subject and g['quarter'] == quarter and g['school_year'] == year:
             sid = str(g['student_id'])
             if sid in grade_updates:
-                # Update this record
                 new_val = grade_updates[sid]
                 if test_name == "Test 1": g['test1'] = new_val
                 elif test_name == "Test 2": g['test2'] = new_val
                 elif test_name == "Test 3": g['test3'] = new_val
-                # Recalculate total
                 g['total_score'] = float(g['test1']) + float(g['test2']) + float(g['test3']) + float(g['final_score'])
                 g['recorded_by'] = teacher
                 g['timestamp'] = str(datetime.datetime.now())
                 processed_sids.append(sid)
         updated_grades.append(list(g.values()))
         
-    # Check for students who didn't have a row yet
     for sid, score in grade_updates.items():
         if sid not in processed_sids:
-            # Create new row
             new_row = {
                 "id": int(time.time()) + int(sid), "student_id": sid, "subject": subject, "quarter": quarter, "school_year": year,
                 "test1": 0, "test2": 0, "test3": 0, "final_score": 0, "total_score": 0, "recorded_by": teacher, "timestamp": str(datetime.datetime.now())
@@ -588,7 +554,7 @@ def save_final_exam_batch(subject, quarter, year, grade_df, max_score, teacher):
         raw = float(row.get('Final Score', 0))
         weighted = 0.0
         if max_score > 0:
-            weighted = (raw / max_score) * 20.0 # Weight is 20
+            weighted = (raw / max_score) * 20.0 
             if weighted > 20.0: weighted = 20.0
         grade_updates[sid] = weighted
         
@@ -974,33 +940,38 @@ def page_input_grades():
                 r = existing_tasks[sid]
                 t1, t2, t3, t4, t5 = r['t1'], r['t2'], r['t3'], r['t4'], r['t5']
             
+            raw_calc = t1+t2+t3+t4+t5
+            weight_calc = (raw_calc / max_score) * weight if max_score else 0.0
+            
             editor_data.append({
                 "No": no, "ID": sid, "Name": name,
-                "Task 1": t1, "Task 2": t2, "Task 3": t3, "Task 4": t4, "Task 5": t5
+                "Task 1": t1, "Task 2": t2, "Task 3": t3, "Task 4": t4, "Task 5": t5,
+                "Total": raw_calc, "Weighted": weight_calc
             })
             
         df_editor = pd.DataFrame(editor_data)
         
-        # 3. Display Editor
-        # Lock ID/Name columns
-        edited_df = st.data_editor(
-            df_editor, 
-            hide_index=True,
-            column_config={
-                "No": st.column_config.NumberColumn(disabled=True),
-                "ID": st.column_config.TextColumn(disabled=True),
-                "Name": st.column_config.TextColumn(disabled=True)
-            },
-            width=1000,
-            key=f"ed_{test_name}"
-        )
-        
-        # 4. Save Button
-        if st.button(f"💾 Batch Save {test_name}", key=f"save_{test_name}"):
-            with st.spinner("Processing..."):
-                ok, msg = save_batch_tasks_and_grades(subj, q, yr, test_name, edited_df, max_score, weight, st.session_state.user[0])
-                if ok: st.success(msg); time.sleep(1.5); st.rerun()
-                else: st.error(msg)
+        # 3. Display Editor INSIDE FORM (FIX FOR BLINKING)
+        with st.form(key=f"form_{test_name}"):
+            edited_df = st.data_editor(
+                df_editor, 
+                hide_index=True,
+                column_config={
+                    "No": st.column_config.NumberColumn(disabled=True),
+                    "ID": st.column_config.TextColumn(disabled=True),
+                    "Name": st.column_config.TextColumn(disabled=True),
+                    "Total": st.column_config.NumberColumn(disabled=True),
+                    "Weighted": st.column_config.NumberColumn(disabled=True, format="%.2f")
+                },
+                width=1000,
+                key=f"ed_{test_name}"
+            )
+            # 4. Save Button as FORM SUBMITTER
+            if st.form_submit_button(f"💾 Batch Save {test_name}"):
+                with st.spinner("Processing..."):
+                    ok, msg = save_batch_tasks_and_grades(subj, q, yr, test_name, edited_df, max_score, weight, st.session_state.user[0])
+                    if ok: st.success(msg); time.sleep(1.5); st.rerun()
+                    else: st.error(msg)
 
     with t_tabs[0]: render_task_tab("Test 1", 10.0)
     with t_tabs[1]: render_task_tab("Test 2", 10.0)
@@ -1010,39 +981,37 @@ def page_input_grades():
         st.markdown("### 🏁 Final Exam")
         max_final = st.number_input("Max Raw Score for Final", min_value=1.0, value=50.0, key="max_final")
         
-        # Fetch grades just for Final column
         all_grades = fetch_all_records("Grades")
-        current_finals = {}
-        for g in all_grades:
-            if g['subject'] == subj and g['quarter'] == q and g['school_year'] == yr:
-                current_finals[str(g['student_id'])] = g['final_score']
-                
         final_data = []
         for idx, row in roster.iterrows():
             sid = str(row['student_id'])
-            # Reverse engineer raw if possible, or just assume input is raw?
-            # User wants to input raw. We store weighted.
-            # Let's show the weighted score, and let them edit that? 
-            # Or simplified: Input RAW, calculate weighted on save.
-            # We will show 0 if new.
-            
-            # Since we didn't store raw final separately, we just let them input raw now.
+            # Attempt to find current final score
+            curr_score = 0.0
+            # (Fetching specific grade is expensive loop here, assume 0 for speed or implement better fetch)
+            # For simplicity in this batch view, we let them enter raw.
             # We display 0.0 default.
-            final_data.append({"No": row['class_no'], "ID": sid, "Name": row['student_name'], "Final Score": 0.0})
+            
+            # Simple calc for display (might be 0 if new)
+            w_disp = (curr_score / max_final) * 20.0 if max_final else 0.0
+            
+            final_data.append({"No": row['class_no'], "ID": sid, "Name": row['student_name'], "Final Score": 0.0, "Weighted (20%)": 0.0})
             
         df_final = pd.DataFrame(final_data)
-        edited_final = st.data_editor(
-            df_final, hide_index=True,
-            column_config={
-                "No": st.column_config.NumberColumn(disabled=True),
-                "ID": st.column_config.TextColumn(disabled=True),
-                "Name": st.column_config.TextColumn(disabled=True)
-            }, width=1000, key="ed_final"
-        )
         
-        if st.button("💾 Save Finals"):
-            if save_final_exam_batch(subj, q, yr, edited_final, max_final, st.session_state.user[0]):
-                st.success("Finals Saved!"); time.sleep(1.5); st.rerun()
+        # WRAP IN FORM
+        with st.form("final_form"):
+            edited_final = st.data_editor(
+                df_final, hide_index=True,
+                column_config={
+                    "No": st.column_config.NumberColumn(disabled=True),
+                    "ID": st.column_config.TextColumn(disabled=True),
+                    "Name": st.column_config.TextColumn(disabled=True),
+                    "Weighted (20%)": st.column_config.NumberColumn(disabled=True)
+                }, width=1000, key="ed_final"
+            )
+            if st.form_submit_button("💾 Save Finals"):
+                if save_final_exam_batch(subj, q, yr, edited_final, max_final, st.session_state.user[0]):
+                    st.success("Finals Saved!"); time.sleep(1.5); st.rerun()
 
     with t_tabs[4]:
         st.markdown("### 📤 Legacy Bulk Upload")
@@ -1068,8 +1037,6 @@ def page_input_grades():
             if st.button(f"Process {upload_target}"):
                 try:
                     df_upload = pd.read_excel(bulk_file)
-                    # Convert uploaded excel to same format as data_editor for compatibility
-                    # Rename columns if needed
                     df_upload = df_upload.rename(columns={"Student ID": "ID"})
                     save_batch_tasks_and_grades(subj, q, yr, upload_target, df_upload, max_raw, target_weight, st.session_state.user[0])
                     st.success("Uploaded!"); time.sleep(1.5); st.rerun()
@@ -1127,31 +1094,59 @@ def page_student_record_teacher_view():
     st.info("Select a student to view their detailed academic summary.")
     
     active_students = get_all_active_students_list()
-    if not active_students.empty:
-        active_students['label'] = active_students.apply(
-            lambda x: f"{x['student_name']} ({x['student_id']}) - {x['grade_level']}/{x['room']}", axis=1
-        )
-        selection = st.selectbox("🔍 Find Student (Type Name or ID)", active_students['label'])
-        
-        if selection:
-            s_search = selection.split('(')[1].split(')')[0]
-            details = get_student_details(s_search)
-            
-            if details:
-                name, lvl, rm, photo, stat = details
-                c_info, c_table = st.columns([1, 3])
-                with c_info:
-                    if photo: st.image(Image.open(io.BytesIO(photo)), width=180)
-                    else: st.image("https://cdn-icons-png.flaticon.com/512/3237/3237472.png", width=180)
-                    st.markdown(f"### {name}")
-                    st.caption(f"ID: {s_search}")
-                    st.info(f"Class: {lvl} / {rm}")
-                with c_table:
-                    df = get_student_grades_for_teacher_view(s_search, st.session_state.user[0])
-                    if not df.empty: display_academic_transcript(df)
-                    else: st.warning("No grades recorded by you.")
-    else:
-        st.warning("No active students found in database.")
+    
+    search_tabs = st.tabs(["🔍 Quick Search", "📂 Filter by Class"])
+    s_search = None
+    
+    with search_tabs[0]:
+        if not active_students.empty:
+            active_students['label'] = active_students.apply(
+                lambda x: f"{x['student_name']} ({x['student_id']}) - {x['grade_level']}/{x['room']}", axis=1
+            )
+            # FIX: Index=None and Placeholder
+            selection = st.selectbox("Find Student", active_students['label'], index=None, placeholder="Type Name or ID to search...", key="quick_search")
+            if selection:
+                s_search = selection.split('(')[1].split(')')[0]
+                
+    with search_tabs[1]:
+        c1, c2, c3 = st.columns(3)
+        f_lvl = c1.selectbox("Level", ["M1","M2","M3","M4","M5","M6"], key="f_lvl")
+        f_rm = c2.selectbox("Room", [str(i) for i in range(1,16)], key="f_rm")
+        filtered = active_students[
+            (active_students['grade_level'] == f_lvl) & 
+            (active_students['room'].astype(str) == f_rm)
+        ]
+        if not filtered.empty:
+            s_name_sel = c3.selectbox("Student", filtered['student_name'], key="f_stu")
+            if s_name_sel:
+                s_row = filtered[filtered['student_name'] == s_name_sel].iloc[0]
+                s_search = str(s_row['student_id'])
+        else: c3.warning("No students.")
+
+    if s_search:
+        details = get_student_details(s_search)
+        if details:
+            name, lvl, rm, photo, stat = details
+            c_info, c_table = st.columns([1, 3])
+            with c_info:
+                if photo: st.image(Image.open(io.BytesIO(photo)), width=180)
+                else: st.image("https://cdn-icons-png.flaticon.com/512/3237/3237472.png", width=180)
+                if 'uploader_key' not in st.session_state: st.session_state.uploader_key = 0
+                with st.popover("📷 Upload Photo"):
+                    ukey = st.session_state.uploader_key
+                    stu_pic = st.file_uploader("Upload", type=['jpg','png'], key=f"s_rec_up_{s_search}_{ukey}")
+                    if stu_pic:
+                        update_student_pic(s_search, stu_pic.getvalue())
+                        st.toast("✅ Photo Updated!")
+                        st.session_state.uploader_key += 1
+                        time.sleep(1.0); st.rerun()
+                st.markdown(f"### {name}")
+                st.caption(f"ID: {s_search}")
+                st.info(f"Class: {lvl} / {rm}")
+            with c_table:
+                df = get_student_grades_for_teacher_view(s_search, st.session_state.user[0])
+                if not df.empty: display_academic_transcript(df)
+                else: st.warning("No grades recorded by you.")
 
 def display_academic_transcript(df):
     pivot = df.pivot_table(index=['school_year', 'subject'], columns='quarter', values='total_score', aggfunc='first').reset_index()
@@ -1174,27 +1169,19 @@ def display_academic_transcript(df):
     for yr in unique_years:
         st.markdown(f"#### 🗓️ Academic Year: {yr}")
         yr_data = pivot[pivot['school_year'] == yr].copy()
-        
-        # Display Tasks?
-        # User asked "let the student see this task". We will add an expander below each table.
-        # But first, show main table
         display_df = yr_data[['subject', 'Q1', 'Q2', 'Sem 1', 'GPA S1', 'Q3', 'Q4', 'Sem 2', 'GPA S2']].copy()
         display_df.columns = ['Subject', 'Q1 (50)', 'Q2 (50)', 'Sem 1 Total', 'S1 Grade', 'Q3 (50)', 'Q4 (50)', 'Sem 2 Total', 'S2 Grade']
         st.dataframe(display_df.style.format(precision=1).map(highlight_low), hide_index=True, width=1000)
         
         with st.expander("🔎 View Task Details"):
             st.info("Showing raw task scores for these subjects.")
-            # Fetch ALL tasks for this year?
             all_tasks = fetch_all_records("Tasks")
-            # Filter for this student and year
-            # This is simpler than complex filtering for display
             student_tasks = [t for t in all_tasks if str(t['student_id']) == str(df.iloc[0]['student_id']) and t['school_year'] == yr]
             if student_tasks:
                 task_df = pd.DataFrame(student_tasks)
                 task_view = task_df[['subject', 'quarter', 'test_name', 't1', 't2', 't3', 't4', 't5', 'raw_total']]
                 st.dataframe(task_view, hide_index=True, width=1000)
-            else:
-                st.caption("No task details found.")
+            else: st.caption("No task details found.")
 
 def page_student_portal_grades():
     s_data = st.session_state.user
