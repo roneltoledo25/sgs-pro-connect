@@ -5,6 +5,7 @@ import time
 import datetime
 import gspread
 import json
+import os
 from oauth2client.service_account import ServiceAccountCredentials
 from PIL import Image
 import base64
@@ -17,7 +18,7 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
-# --- STUNNING PROFESSIONAL CSS ---
+# --- CSS STYLING ---
 st.markdown("""
 <style>
     .main { padding-top: 2rem; }
@@ -30,52 +31,189 @@ st.markdown("""
     .stTextInput > div > div > input, .stSelectbox > div > div > div { border-radius: 8px; }
     [data-testid="stDataFrame"] { border-radius: 10px; overflow: hidden; border: 1px solid rgba(128, 128, 128, 0.1); }
     .profile-pic { border-radius: 50%; border: 3px solid var(--primary-color); padding: 3px; }
-    .streamlit-expanderHeader { font-weight: 600; background-color: var(--secondary-background-color); border-radius: 8px; }
 </style>
 """, unsafe_allow_html=True)
 
 # --- CONSTANTS ---
 SHEET_NAME = "SGS_Database" 
+LOCAL_FILE = "sgs_local_data.xlsx"
 SCHOOL_CODE = "SK2025"
 STUDENT_STATUSES = ["Active", "Transferred", "Dropped Out", "Graduate", "Deleted"]
 
-# --- GOOGLE SHEETS CONNECTION ---
+# --- DATA MANAGER (THE BRAIN) ---
+
+def get_data_mode():
+    if 'data_mode' not in st.session_state: st.session_state.data_mode = 'Local'
+    return st.session_state.data_mode
+
 @st.cache_resource
-def get_db_connection():
+def get_cloud_connection():
     scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
     try:
+        if "gcp" not in st.secrets: return None
         json_str = st.secrets["gcp"]["service_account_json"]
         creds_dict = json.loads(json_str)
         creds = ServiceAccountCredentials.from_json_keyfile_dict(creds_dict, scope)
         client = gspread.authorize(creds)
-        sheet = client.open(SHEET_NAME)
-        return sheet
+        return client.open(SHEET_NAME)
     except Exception as e:
-        st.error(f"❌ Database Connection Error: {e}")
-        st.stop()
-
+        print(f"Cloud Error: {e}")
+        return None
 def init_db():
+    # Define the Schema (The structure of your database)
+    required_schema = {
+        "Users": ["username", "password", "role", "profile_pic"],
+        "Subjects": ["id", "teacher_username", "subject_name"],
+        "Students": ["student_id", "student_name", "class_no", "grade_level", "room", "photo", "password", "status"],
+        "Grades": ["id", "student_id", "subject", "quarter", "school_year", "test1", "test2", "test3", "final_score", "total_score", "recorded_by", "timestamp"],
+        "Tasks": ["uid", "student_id", "subject", "quarter", "school_year", "test_name", "t1", "t2", "t3", "t4", "t5", "raw_total"]
+    }
+
+    # --- 1. LOCAL SELF-HEALING (Excel) ---
+    if not os.path.exists(LOCAL_FILE):
+        # Scenario A: File completely missing -> Create Fresh
+        with pd.ExcelWriter(LOCAL_FILE, engine='xlsxwriter') as writer:
+            for sheet, cols in required_schema.items():
+                df = pd.DataFrame(columns=cols)
+                if sheet == "Users": 
+                    # Add default admin to new DataFrame
+                    df = pd.DataFrame([["admin", "admin123", "Admin", ""]], columns=cols)
+                df.to_excel(writer, sheet_name=sheet, index=False)
+    else:
+        # Scenario B: File exists -> Check for missing tabs
+        try:
+            # Load all current sheets
+            current_sheets = pd.read_excel(LOCAL_FILE, sheet_name=None)
+            file_needs_update = False
+
+            for sheet, cols in required_schema.items():
+                if sheet not in current_sheets:
+                    # Create the missing sheet
+                    print(f"⚠️ Repairing Local DB: Restoring '{sheet}'...")
+                    new_df = pd.DataFrame(columns=cols)
+                    if sheet == "Users": 
+                        new_df = pd.DataFrame([["admin", "admin123", "Admin", ""]], columns=cols)
+                    current_sheets[sheet] = new_df
+                    file_needs_update = True
+            
+            # If we fixed anything, overwrite the file with the repaired data
+            if file_needs_update:
+                with pd.ExcelWriter(LOCAL_FILE, engine='xlsxwriter') as writer:
+                    for name, df in current_sheets.items():
+                        df.to_excel(writer, sheet_name=name, index=False)
+                        
+        except Exception as e:
+            print(f"Local Init Error: {e}")
+
+    # --- 2. CLOUD SELF-HEALING (Google Sheets) ---
+    if get_data_mode() == 'Cloud':
+        sh = get_cloud_connection()
+        if sh:
+            try:
+                existing_titles = [w.title for w in sh.worksheets()]
+                
+                for sheet, cols in required_schema.items():
+                    if sheet not in existing_titles:
+                        print(f"⚠️ Repairing Cloud DB: Restoring '{sheet}'...")
+                        ws = sh.add_worksheet(sheet, 100, len(cols))
+                        ws.append_row(cols)
+                        
+                        if sheet == "Users":
+                            ws.append_row(["admin", "admin123", "Admin", ""])
+                            
+            except Exception as e:
+                print(f"Cloud Init Error: {e}")
+
+@st.cache_data(ttl=5)
+def fetch_all_records(sheet_name):
+    mode = get_data_mode()
+    if mode == 'Cloud':
+        sh = get_cloud_connection()
+        if not sh: return []
+        return sh.worksheet(sheet_name).get_all_records()
+    elif mode == 'Local':
+        init_db()
+        try:
+            df = pd.read_excel(LOCAL_FILE, sheet_name=sheet_name)
+            for col in ['student_id', 'password', 'username', 'teacher_username']:
+                if col in df.columns: df[col] = df[col].astype(str).replace('nan', '')
+            return df.fillna("").to_dict('records')
+        except: return []
+
+def overwrite_sheet_data(sheet_name, data_list_of_dicts):
+    mode = get_data_mode()
+    if mode == 'Cloud':
+        sh = get_cloud_connection()
+        if sh is None:
+            st.error("❌ Cloud Connection Failed. Please switch to Local Mode.")
+            return
+        ws = sh.worksheet(sheet_name)
+        if len(data_list_of_dicts) > 0:
+            headers = list(data_list_of_dicts[0].keys())
+            rows = [headers] + [list(d.values()) for d in data_list_of_dicts]
+            ws.clear()
+            ws.append_rows(rows)
+        else: ws.clear()
+    elif mode == 'Local':
+        init_db()
+        try: all_sheets = pd.read_excel(LOCAL_FILE, sheet_name=None)
+        except: all_sheets = {}
+        new_df = pd.DataFrame(data_list_of_dicts)
+        all_sheets[sheet_name] = new_df
+        with pd.ExcelWriter(LOCAL_FILE, engine='xlsxwriter') as writer:
+            for name, df in all_sheets.items():
+                df.to_excel(writer, sheet_name=name, index=False)
+
+def clear_cache():
+    st.cache_data.clear()
+
+# --- SYNC FUNCTIONS ---
+def sync_cloud_to_local():
     try:
-        sh = get_db_connection()
-        existing_titles = [w.title for w in sh.worksheets()]
-        if "Users" not in existing_titles:
-            ws = sh.add_worksheet("Users", 100, 10)
-            ws.append_row(["username", "password", "role", "profile_pic"])
-            ws.append_row(["admin", "admin123", "Admin", ""])
-        if "Subjects" not in existing_titles:
-            ws = sh.add_worksheet("Subjects", 100, 5)
-            ws.append_row(["id", "teacher_username", "subject_name"])
-        if "Students" not in existing_titles:
-            ws = sh.add_worksheet("Students", 100, 10)
-            ws.append_row(["student_id", "student_name", "class_no", "grade_level", "room", "photo", "password", "status"])
-        if "Grades" not in existing_titles:
-            ws = sh.add_worksheet("Grades", 100, 15)
-            ws.append_row(["id", "student_id", "subject", "quarter", "school_year", "test1", "test2", "test3", "final_score", "total_score", "recorded_by", "timestamp"])
-        if "Tasks" not in existing_titles:
-            ws = sh.add_worksheet("Tasks", 100, 12)
-            ws.append_row(["uid", "student_id", "subject", "quarter", "school_year", "test_name", "t1", "t2", "t3", "t4", "t5", "raw_total"])
-    except Exception as e:
-        st.error(f"DB Init Error: {e}")
+        sh = get_cloud_connection()
+        if not sh: return False, "No Cloud Connection"
+        sheets = ["Users", "Subjects", "Students", "Grades", "Tasks"]
+        with pd.ExcelWriter(LOCAL_FILE, engine='xlsxwriter') as writer:
+            for s in sheets:
+                df = pd.DataFrame(sh.worksheet(s).get_all_records())
+                df.to_excel(writer, sheet_name=s, index=False)
+        return True, "✅ Cloud data downloaded!"
+    except Exception as e: return False, f"Error: {e}"
+
+def sync_local_to_cloud():
+    try:
+        if not os.path.exists(LOCAL_FILE): return False, "No local file."
+        sh = get_cloud_connection()
+        if not sh: return False, "No Cloud Connection"
+        
+        xls = pd.read_excel(LOCAL_FILE, sheet_name=None)
+        report_log = []
+        
+        for sheet_name, local_df in xls.items():
+            local_df = local_df.fillna("")
+            if sheet_name == "Students":
+                cloud_data = sh.worksheet("Students").get_all_records()
+                cloud_ids = [str(row['student_id']) for row in cloud_data]
+                new_rows = []
+                for idx, row in local_df.iterrows():
+                    if str(row['student_id']).strip() not in cloud_ids:
+                        new_rows.append(row.tolist())
+                if new_rows:
+                    sh.worksheet("Students").append_rows(new_rows)
+                    report_log.append(f"Added {len(new_rows)} Students.")
+            elif sheet_name == "Users":
+                cloud_users = sh.worksheet("Users").get_all_records()
+                cloud_usernames = [str(r['username']) for r in cloud_users]
+                new_users = []
+                for idx, row in local_df.iterrows():
+                    if str(row['username']) not in cloud_usernames and str(row['username']) != "admin":
+                        new_users.append(row.tolist())
+                if new_users:
+                    sh.worksheet("Users").append_rows(new_users)
+                    report_log.append(f"Added {len(new_users)} Users.")
+        
+        return True, "✅ Sync Complete! (New Students/Users added)."
+    except Exception as e: return False, f"Error: {e}"
 
 # --- HELPER FUNCTIONS ---
 def get_school_years():
@@ -112,20 +250,12 @@ def base64_to_image(b64_str):
     try: return base64.b64decode(b64_str)
     except: return None
 
-# --- BACKEND FUNCTIONS WITH CACHING ---
-
-@st.cache_data(ttl=5)
-def fetch_all_records(sheet_name):
-    sh = get_db_connection()
-    return sh.worksheet(sheet_name).get_all_records()
-
-def clear_cache():
-    st.cache_data.clear()
+# --- BACKEND LOGIC ---
 
 def login_staff(username, password):
     records = fetch_all_records("Users")
     for row in records:
-        if str(row['username']) == str(username) and str(row['password']) == str(password):
+        if str(row['username']).lower() == str(username).lower() and str(row['password']) == str(password):
             return (row['username'], row['password'], row['role'], base64_to_image(row['profile_pic']))
     return None
 
@@ -144,66 +274,46 @@ def login_student(student_id, password):
     return None
 
 def change_student_password(s_id, new_pass):
-    sh = get_db_connection()
-    ws = sh.worksheet("Students")
-    cell = ws.find(str(s_id))
-    if cell: 
-        ws.update_cell(cell.row, 7, new_pass)
-        clear_cache()
+    records = fetch_all_records("Students")
+    for r in records:
+        if str(r['student_id']) == str(s_id): r['password'] = new_pass
+    overwrite_sheet_data("Students", records)
+    clear_cache()
 
 def register_user(username, password, code):
     if code != SCHOOL_CODE: return False, "❌ Invalid School Code!"
-    sh = get_db_connection()
-    ws = sh.worksheet("Users")
-    if ws.find(username): return False, "⚠️ Username taken"
-    ws.append_row([username, password, 'Teacher', ""])
+    records = fetch_all_records("Users")
+    for r in records:
+        if r['username'].lower() == username.lower(): return False, "Taken"
+    records.append({"username": username, "password": password, "role": "Teacher", "profile_pic": ""})
+    overwrite_sheet_data("Users", records)
     clear_cache()
-    return True, "✅ Success"
+    return True, "Success"
 
-# --- TEACHER CREDENTIALS UPDATE ---
 def update_teacher_credentials(old_u, new_u, new_p):
-    sh = get_db_connection()
-    ws_users = sh.worksheet("Users")
-    ws_subs = sh.worksheet("Subjects")
-    ws_grades = sh.worksheet("Grades")
-    
-    # 1. Check if new username taken (only if changing)
+    users = fetch_all_records("Users")
+    if old_u.lower() != new_u.lower():
+        for u in users:
+            if u['username'].lower() == new_u.lower(): return False, "Username Taken"
+    for u in users:
+        if u['username'] == old_u:
+            u['username'] = new_u
+            u['password'] = new_p
+    # Cascade
+    subs = fetch_all_records("Subjects")
+    grades = fetch_all_records("Grades")
     if old_u != new_u:
-        try:
-            if ws_users.find(new_u): return False, "⚠️ Username already taken."
-        except: pass
-    
-    # 2. Update Users Sheet
-    cell = ws_users.find(old_u)
-    if cell:
-        ws_users.update_cell(cell.row, 1, new_u)
-        ws_users.update_cell(cell.row, 2, new_p)
-    
-    # 3. Update Subjects (Cascade)
-    if old_u != new_u:
-        subs = ws_subs.get_all_records()
-        s_updates = []
-        s_updates.append(["id", "teacher_username", "subject_name"])
         for s in subs:
-            t = new_u if s['teacher_username'] == old_u else s['teacher_username']
-            s_updates.append([s['id'], t, s['subject_name']])
-        ws_subs.clear()
-        ws_subs.append_rows(s_updates)
-        
-        # 4. Update Grades (Cascade)
-        grades = ws_grades.get_all_records()
-        g_updates = []
-        g_updates.append(["id", "student_id", "subject", "quarter", "school_year", "test1", "test2", "test3", "final_score", "total_score", "recorded_by", "timestamp"])
+            if s['teacher_username'] == old_u: s['teacher_username'] = new_u
         for g in grades:
-            rec = new_u if g['recorded_by'] == old_u else g['recorded_by']
-            g_updates.append([g['id'], g['student_id'], g['subject'], g['quarter'], g['school_year'], g['test1'], g['test2'], g['test3'], g['final_score'], g['total_score'], rec, g['timestamp']])
-        ws_grades.clear()
-        ws_grades.append_rows(g_updates)
-    
+            if g['recorded_by'] == old_u: g['recorded_by'] = new_u
+    overwrite_sheet_data("Users", users)
+    overwrite_sheet_data("Subjects", subs)
+    overwrite_sheet_data("Grades", grades)
     clear_cache()
-    return True, "✅ Credentials Updated! Please log in again."
+    return True, "Updated"
 
-# --- ADMIN FUNCTIONS ---
+# --- READERS ---
 def get_admin_stats():
     users = fetch_all_records("Users")
     studs = fetch_all_records("Students")
@@ -224,88 +334,16 @@ def get_all_teachers_with_counts():
             data.append({'username': u['username'], 'password': u['password'], 'subject_count': count})
     return pd.DataFrame(data).astype(str)
 
-def delete_teacher(username):
-    sh = get_db_connection()
-    ws_u = sh.worksheet("Users")
-    cell = ws_u.find(username)
-    if cell: ws_u.delete_rows(cell.row)
-    ws_s = sh.worksheet("Subjects")
-    all_s = ws_s.get_all_records()
-    new_s = [row for row in all_s if row['teacher_username'] != username]
-    ws_s.clear()
-    ws_s.append_row(["id", "teacher_username", "subject_name"])
-    for r in new_s: ws_s.append_row([r['id'], r['teacher_username'], r['subject_name']])
-    clear_cache()
-
-def admin_reset_teacher_password(username, new_pass):
-    sh = get_db_connection()
-    ws = sh.worksheet("Users")
-    cell = ws.find(username)
-    if cell: 
-        ws.update_cell(cell.row, 2, new_pass)
-        clear_cache()
-
 def get_all_students_admin(include_deleted=False):
     data = fetch_all_records("Students")
-    df = pd.DataFrame(data)
-    if not df.empty:
-        df = df.astype(str)
-        if not include_deleted:
-            df = df[df['status'] != 'Deleted']
+    df = pd.DataFrame(data).astype(str)
+    if not df.empty and not include_deleted:
+        df = df[df['status'] != 'Deleted']
     return df
-
-def delete_student_admin(s_id):
-    sh = get_db_connection()
-    ws = sh.worksheet("Students")
-    cell = ws.find(str(s_id))
-    if cell: ws.delete_rows(cell.row)
-    clear_cache()
-
-def admin_restore_student(s_id):
-    sh = get_db_connection()
-    ws = sh.worksheet("Students")
-    cell = ws.find(str(s_id))
-    if cell:
-        ws.update_cell(cell.row, 8, "Active")
-        clear_cache()
-        return True
-    return False
-
-def admin_reset_student_password(s_id, new_pass):
-    sh = get_db_connection()
-    ws = sh.worksheet("Students")
-    cell = ws.find(str(s_id))
-    if cell: 
-        ws.update_cell(cell.row, 7, new_pass)
-        clear_cache()
-
-# --- GENERAL FUNCTIONS ---
-def update_teacher_pic(username, image_bytes):
-    sh = get_db_connection()
-    ws = sh.worksheet("Users")
-    cell = ws.find(username)
-    if cell: 
-        ws.update_cell(cell.row, 4, image_to_base64(image_bytes))
-        clear_cache()
-
-def update_student_pic(student_id, image_bytes):
-    sh = get_db_connection()
-    ws = sh.worksheet("Students")
-    cell = ws.find(str(student_id))
-    if cell: 
-        ws.update_cell(cell.row, 6, image_to_base64(image_bytes))
-        clear_cache()
 
 def get_teacher_data(username):
     user = login_staff(username, "") 
     if user: return user[3] 
-    return None
-
-def get_student_photo(student_id):
-    records = fetch_all_records("Students")
-    for r in records:
-        if str(r['student_id']) == str(student_id):
-            return base64_to_image(r['photo'])
     return None
 
 def get_student_details(student_id):
@@ -322,115 +360,6 @@ def get_next_class_no(level, room):
         if r['grade_level'] == level and str(r['room']) == str(room) and r.get('status') != 'Deleted':
             if int(r['class_no']) > max_no: max_no = int(r['class_no'])
     return max_no + 1
-
-def add_single_student(s_id, name, no, level, room, status="Active"):
-    sh = get_db_connection()
-    ws = sh.worksheet("Students")
-    try:
-        if ws.find(str(s_id)): return False, f"⚠️ Student ID {s_id} already exists!"
-    except: pass
-    ws.append_row([str(s_id), name, no, level, room, "", "", status])
-    clear_cache()
-    return True, f"✅ Added {name}"
-
-def update_student_details(s_id, new_name, new_no, new_status):
-    sh = get_db_connection()
-    ws = sh.worksheet("Students")
-    cell = ws.find(str(s_id))
-    if cell:
-        ws.update_cell(cell.row, 2, new_name)
-        ws.update_cell(cell.row, 3, new_no)
-        ws.update_cell(cell.row, 8, new_status)
-        clear_cache()
-        return True, "Updated"
-    return False, "Not found"
-
-def update_student_status(s_id, new_status):
-    sh = get_db_connection()
-    ws = sh.worksheet("Students")
-    cell = ws.find(str(s_id))
-    if cell:
-        ws.update_cell(cell.row, 8, new_status)
-        clear_cache()
-        return True, f"Status updated to {new_status}"
-    return False, "Error"
-
-def delete_single_student(s_id):
-    sh = get_db_connection()
-    ws = sh.worksheet("Students")
-    cell = ws.find(str(s_id))
-    if cell:
-        ws.update_cell(cell.row, 8, "Deleted")
-        clear_cache()
-        return True, "Moved to Bin"
-    return False, "Error"
-
-def soft_delete_class_roster(level, room):
-    sh = get_db_connection()
-    ws = sh.worksheet("Students")
-    all_data = ws.get_all_records()
-    new_rows = []
-    new_rows.append(["student_id", "student_name", "class_no", "grade_level", "room", "photo", "password", "status"])
-    count = 0
-    for r in all_data:
-        stat = r.get('status', 'Active')
-        if r['grade_level'] == level and str(r['room']) == str(room):
-            stat = "Deleted"
-            count += 1
-        new_rows.append([r['student_id'], r['student_name'], r['class_no'], r['grade_level'], r['room'], r['photo'], r['password'], stat])
-    ws.clear()
-    ws.append_rows(new_rows)
-    clear_cache()
-    return True, f"Moved {count} students to Bin"
-
-def promote_students(from_lvl, from_rm, to_lvl, to_rm):
-    sh = get_db_connection()
-    ws = sh.worksheet("Students")
-    all_data = ws.get_all_records()
-    new_rows = []
-    new_rows.append(["student_id", "student_name", "class_no", "grade_level", "room", "photo", "password", "status"])
-    count = 0
-    for r in all_data:
-        lvl = r['grade_level']
-        rm = str(r['room'])
-        stat = r.get('status', 'Active')
-        if lvl == from_lvl and rm == str(from_rm) and stat == 'Active':
-            lvl = to_lvl
-            rm = to_rm
-            count += 1
-        new_rows.append([r['student_id'], r['student_name'], r['class_no'], lvl, rm, r['photo'], r['password'], stat])
-    ws.clear()
-    ws.append_rows(new_rows)
-    clear_cache()
-    return True, f"Promoted {count} students"
-
-def upload_roster(df, level, room):
-    sh = get_db_connection()
-    ws = sh.worksheet("Students")
-    existing_ids = [str(r['student_id']) for r in ws.get_all_records()]
-    added = 0
-    errors = []
-    rows_to_add = []
-    current_max = 0
-    all_recs = ws.get_all_records()
-    for r in all_recs:
-        if r['grade_level'] == level and str(r['room']) == str(room) and r.get('status') != 'Deleted':
-             if int(r['class_no']) > current_max: current_max = int(r['class_no'])
-    current_number = current_max + 1
-    for index, row in df.iterrows():
-        s_id = str(row['ID']).strip()
-        if s_id.endswith('.0'): s_id = s_id[:-2]
-        name = str(row['Name']).strip()
-        if s_id in existing_ids:
-            errors.append(f"Skipped {s_id} (Duplicate)")
-            continue
-        rows_to_add.append([s_id, name, current_number, level, room, "", "", "Active"])
-        existing_ids.append(s_id)
-        current_number += 1
-        added += 1
-    if rows_to_add: ws.append_rows(rows_to_add)
-    clear_cache()
-    return True, f"✅ Uploaded {added}", errors
 
 def get_class_roster(level, room, only_active=False):
     records = fetch_all_records("Students")
@@ -451,10 +380,7 @@ def get_class_roster(level, room, only_active=False):
 
 def get_all_active_students_list():
     records = fetch_all_records("Students")
-    res = []
-    for r in records:
-        if r.get('status') == 'Active':
-            res.append(r)
+    res = [r for r in records if r.get('status') == 'Active']
     return pd.DataFrame(res)
 
 def get_teacher_subjects_full(teacher):
@@ -470,39 +396,6 @@ def get_subject_student_count(subject_name):
     count = sum(1 for g in grades if g['subject'] == subject_name)
     return count
 
-def add_subject(teacher, subject):
-    sh = get_db_connection()
-    ws = sh.worksheet("Subjects")
-    records = ws.get_all_records()
-    for r in records:
-        if r['teacher_username'] == teacher and r['subject_name'] == subject:
-            return False, "⚠️ You already have this subject."
-    new_id = int(time.time())
-    ws.append_row([new_id, teacher, subject])
-    clear_cache()
-    return True, "Added"
-
-def delete_subject(sub_id):
-    sh = get_db_connection()
-    ws = sh.worksheet("Subjects")
-    records = ws.get_all_records()
-    for i, r in enumerate(records):
-        if str(r['id']) == str(sub_id):
-            ws.delete_rows(i + 2)
-            clear_cache()
-            return
-
-def update_subject(sub_id, new_name):
-    sh = get_db_connection()
-    ws = sh.worksheet("Subjects")
-    records = ws.get_all_records()
-    for i, r in enumerate(records):
-        if str(r['id']) == str(sub_id):
-            ws.update_cell(i + 2, 3, new_name)
-            clear_cache()
-            return True
-    return False
-
 def fetch_task_records(subject, quarter, year, test_name):
     records = fetch_all_records("Tasks")
     res = {}
@@ -511,50 +404,215 @@ def fetch_task_records(subject, quarter, year, test_name):
             res[str(r['student_id'])] = r
     return res
 
-def save_batch_tasks_and_grades(subject, quarter, year, test_name, task_df, max_score, weight, teacher):
-    sh = get_db_connection()
-    ws_tasks = sh.worksheet("Tasks")
-    ws_grades = sh.worksheet("Grades")
-    all_tasks = ws_tasks.get_all_records()
-    keep_tasks = []
-    for t in all_tasks:
-        if not (t['subject'] == subject and t['quarter'] == quarter and t['school_year'] == year and t['test_name'] == test_name):
-            keep_tasks.append(t)
+def get_grade_record(student_id, subject, quarter, year):
+    records = fetch_all_records("Grades")
+    for r in records:
+        if (str(r['student_id']) == str(student_id) and r['subject'] == subject and r['quarter'] == quarter and r['school_year'] == year):
+            return (r['test1'], r['test2'], r['test3'], r['final_score'], r['total_score'])
+    return None
+
+def get_student_grades_for_teacher_view(student_id, teacher_username):
+    records = fetch_all_records("Grades")
+    data = [r for r in records if str(r['student_id']) == str(student_id) and r['recorded_by'] == teacher_username]
+    return pd.DataFrame(data)
+
+def get_student_full_report(student_id):
+    records = fetch_all_records("Grades")
+    data = [r for r in records if str(r['student_id']) == str(student_id)]
+    return pd.DataFrame(data)
+
+# --- WRITERS ---
+
+def delete_teacher(username):
+    users = fetch_all_records("Users")
+    subs = fetch_all_records("Subjects")
+    users = [u for u in users if u['username'] != username]
+    subs = [s for s in subs if s['teacher_username'] != username]
+    overwrite_sheet_data("Users", users)
+    overwrite_sheet_data("Subjects", subs)
+    clear_cache()
+
+def admin_reset_teacher_password(username, new_pass):
+    users = fetch_all_records("Users")
+    for u in users:
+        if u['username'] == username: u['password'] = new_pass
+    overwrite_sheet_data("Users", users)
+    clear_cache()
+
+def delete_student_admin(s_id):
+    studs = fetch_all_records("Students")
+    studs = [s for s in studs if str(s['student_id']) != str(s_id)]
+    overwrite_sheet_data("Students", studs)
+    clear_cache()
+
+def admin_restore_student(s_id):
+    studs = fetch_all_records("Students")
+    for s in studs:
+        if str(s['student_id']) == str(s_id): s['status'] = "Active"
+    overwrite_sheet_data("Students", studs)
+    clear_cache()
+    return True
+
+def admin_reset_student_password(s_id, new_pass):
+    studs = fetch_all_records("Students")
+    for s in studs:
+        if str(s['student_id']) == str(s_id): s['password'] = new_pass
+    overwrite_sheet_data("Students", studs)
+    clear_cache()
+
+def update_teacher_pic(username, image_bytes):
+    users = fetch_all_records("Users")
+    for u in users:
+        if u['username'] == username: u['profile_pic'] = image_to_base64(image_bytes)
+    overwrite_sheet_data("Users", users)
+    clear_cache()
+
+def update_student_pic(student_id, image_bytes):
+    studs = fetch_all_records("Students")
+    for s in studs:
+        if str(s['student_id']) == str(student_id): s['photo'] = image_to_base64(image_bytes)
+    overwrite_sheet_data("Students", studs)
+    clear_cache()
+
+def add_single_student(s_id, name, no, level, room, status="Active"):
+    studs = fetch_all_records("Students")
+    for s in studs:
+        if str(s['student_id']) == str(s_id): return False, "ID Exists"
+    studs.append({"student_id": str(s_id), "student_name": name, "class_no": no, "grade_level": level, "room": room, "photo": "", "password": "", "status": status})
+    overwrite_sheet_data("Students", studs)
+    clear_cache()
+    return True, f"Added {name}"
+
+def update_student_details(s_id, new_name, new_no, new_status):
+    studs = fetch_all_records("Students")
+    for s in studs:
+        if str(s['student_id']) == str(s_id):
+            s['student_name'] = new_name
+            s['class_no'] = new_no
+            s['status'] = new_status
+    overwrite_sheet_data("Students", studs)
+    clear_cache()
+    return True, "Updated"
+
+def update_student_status(s_id, new_status):
+    studs = fetch_all_records("Students")
+    found = False
+    for s in studs:
+        if str(s['student_id']) == str(s_id):
+            s['status'] = new_status
+            found = True
+    if found:
+        overwrite_sheet_data("Students", studs)
+        clear_cache()
+        return True, f"Status updated to {new_status}"
+    return False, "Error"
+
+def delete_single_student(s_id):
+    studs = fetch_all_records("Students")
+    for s in studs:
+        if str(s['student_id']) == str(s_id): s['status'] = "Deleted"
+    overwrite_sheet_data("Students", studs)
+    clear_cache()
+    return True, "Moved to Bin"
+
+def soft_delete_class_roster(level, room):
+    studs = fetch_all_records("Students")
+    c = 0
+    for s in studs:
+        if s['grade_level'] == level and str(s['room']) == str(room):
+            s['status'] = "Deleted"
+            c += 1
+    overwrite_sheet_data("Students", studs)
+    clear_cache()
+    return True, f"Deleted {c}"
+
+def promote_students(from_lvl, from_rm, to_lvl, to_rm):
+    studs = fetch_all_records("Students")
+    c = 0
+    for s in studs:
+        if s['grade_level'] == from_lvl and str(s['room']) == str(from_rm) and s.get('status') == 'Active':
+            s['grade_level'] = to_lvl
+            s['room'] = to_rm
+            c += 1
+    overwrite_sheet_data("Students", studs)
+    clear_cache()
+    return True, f"Promoted {c}"
+
+def upload_roster(df, level, room):
+    studs = fetch_all_records("Students")
+    existing_ids = [str(s['student_id']) for s in studs]
+    current_max = 0
+    for s in studs:
+        if s['grade_level'] == level and str(s['room']) == str(room) and s.get('status') != 'Deleted':
+             if int(s['class_no']) > current_max: current_max = int(s['class_no'])
+    current_number = current_max + 1
     
-    new_task_rows = []
+    added = 0
+    errors = []
+    for index, row in df.iterrows():
+        s_id = str(row['ID']).strip()
+        if s_id.endswith('.0'): s_id = s_id[:-2]
+        if s_id in existing_ids:
+            errors.append(f"Skipped {s_id}")
+            continue
+        studs.append({"student_id": s_id, "student_name": str(row['Name']), "class_no": current_number, "grade_level": level, "room": room, "photo": "", "password": "", "status": "Active"})
+        existing_ids.append(s_id)
+        current_number += 1
+        added += 1
+    overwrite_sheet_data("Students", studs)
+    clear_cache()
+    return True, f"Uploaded {added}", errors
+
+def add_subject(teacher, subject):
+    subs = fetch_all_records("Subjects")
+    for r in subs:
+        if r['teacher_username'] == teacher and r['subject_name'] == subject: return False, "Duplicate"
+    subs.append({"id": int(time.time()), "teacher_username": teacher, "subject_name": subject})
+    overwrite_sheet_data("Subjects", subs)
+    clear_cache()
+    return True, "Added"
+
+def delete_subject(sub_id):
+    subs = fetch_all_records("Subjects")
+    subs = [s for s in subs if str(s['id']) != str(sub_id)]
+    overwrite_sheet_data("Subjects", subs)
+    clear_cache()
+
+def update_subject(sub_id, new_name):
+    subs = fetch_all_records("Subjects")
+    for s in subs:
+        if str(s['id']) == str(sub_id): s['subject_name'] = new_name
+    overwrite_sheet_data("Subjects", subs)
+    clear_cache()
+    return True
+
+def save_batch_tasks_and_grades(subject, quarter, year, test_name, task_df, max_score, weight, teacher):
+    all_tasks = fetch_all_records("Tasks")
+    all_grades = fetch_all_records("Grades")
+    
+    # Filter old tasks
+    all_tasks = [t for t in all_tasks if not (t['subject'] == subject and t['quarter'] == quarter and t['school_year'] == year and t['test_name'] == test_name)]
+    
     grade_updates = {}
     
     for idx, row in task_df.iterrows():
         sid = str(row['ID'])
-        t1 = float(row.get('Task 1', 0))
-        t2 = float(row.get('Task 2', 0))
-        t3 = float(row.get('Task 3', 0))
-        t4 = float(row.get('Task 4', 0))
-        t5 = float(row.get('Task 5', 0))
+        t1, t2, t3, t4, t5 = float(row.get('Task 1',0)), float(row.get('Task 2',0)), float(row.get('Task 3',0)), float(row.get('Task 4',0)), float(row.get('Task 5',0))
         raw_total = t1+t2+t3+t4+t5
-        
         weighted = 0.0
         if max_score > 0:
             weighted = (raw_total / max_score) * weight
             if weighted > weight: weighted = weight
-            
         grade_updates[sid] = weighted
-        uid = f"{sid}_{subject}_{quarter}_{year}_{test_name}"
-        new_task_rows.append([uid, sid, subject, quarter, year, test_name, t1, t2, t3, t4, t5, raw_total])
-
-    final_task_data = []
-    final_task_data.append(["uid", "student_id", "subject", "quarter", "school_year", "test_name", "t1", "t2", "t3", "t4", "t5", "raw_total"])
-    for k in keep_tasks: final_task_data.append(list(k.values()))
-    final_task_data.extend(new_task_rows)
+        
+        all_tasks.append({
+            "uid": f"{sid}_{subject}_{quarter}_{year}_{test_name}", "student_id": sid, "subject": subject, "quarter": quarter, "school_year": year, 
+            "test_name": test_name, "t1": t1, "t2": t2, "t3": t3, "t4": t4, "t5": t5, "raw_total": raw_total
+        })
     
-    ws_tasks.clear()
-    ws_tasks.append_rows(final_task_data)
+    overwrite_sheet_data("Tasks", all_tasks)
     
-    all_grades = ws_grades.get_all_records()
-    updated_grades = []
-    updated_grades.append(["id", "student_id", "subject", "quarter", "school_year", "test1", "test2", "test3", "final_score", "total_score", "recorded_by", "timestamp"])
     processed_sids = []
-    
     for g in all_grades:
         if g['subject'] == subject and g['quarter'] == quarter and g['school_year'] == year:
             sid = str(g['student_id'])
@@ -567,30 +625,21 @@ def save_batch_tasks_and_grades(subject, quarter, year, test_name, task_df, max_
                 g['recorded_by'] = teacher
                 g['timestamp'] = str(datetime.datetime.now())
                 processed_sids.append(sid)
-        updated_grades.append(list(g.values()))
-        
+                
     for sid, score in grade_updates.items():
         if sid not in processed_sids:
-            new_row = {
-                "id": int(time.time()) + int(sid), "student_id": sid, "subject": subject, "quarter": quarter, "school_year": year,
-                "test1": 0, "test2": 0, "test3": 0, "final_score": 0, "total_score": 0, "recorded_by": teacher, "timestamp": str(datetime.datetime.now())
-            }
+            new_row = {"id": int(time.time())+int(sid), "student_id": sid, "subject": subject, "quarter": quarter, "school_year": year, "test1": 0, "test2": 0, "test3": 0, "final_score": 0, "total_score": score, "recorded_by": teacher, "timestamp": str(datetime.datetime.now())}
             if test_name == "Test 1": new_row['test1'] = score
             elif test_name == "Test 2": new_row['test2'] = score
             elif test_name == "Test 3": new_row['test3'] = score
-            new_row['total_score'] = score
-            updated_grades.append(list(new_row.values()))
+            all_grades.append(new_row)
             
-    ws_grades.clear()
-    ws_grades.append_rows(updated_grades)
+    overwrite_sheet_data("Grades", all_grades)
     clear_cache()
     return True, "Batch Save Successful"
 
 def save_final_exam_batch(subject, quarter, year, grade_df, max_score, teacher):
-    sh = get_db_connection()
-    ws_grades = sh.worksheet("Grades")
-    all_grades = ws_grades.get_all_records()
-    
+    all_grades = fetch_all_records("Grades")
     grade_updates = {}
     for idx, row in grade_df.iterrows():
         sid = str(row['ID'])
@@ -601,10 +650,7 @@ def save_final_exam_batch(subject, quarter, year, grade_df, max_score, teacher):
             if weighted > 20.0: weighted = 20.0
         grade_updates[sid] = weighted
         
-    updated_grades = []
-    updated_grades.append(["id", "student_id", "subject", "quarter", "school_year", "test1", "test2", "test3", "final_score", "total_score", "recorded_by", "timestamp"])
     processed_sids = []
-    
     for g in all_grades:
         if g['subject'] == subject and g['quarter'] == quarter and g['school_year'] == year:
             sid = str(g['student_id'])
@@ -614,38 +660,28 @@ def save_final_exam_batch(subject, quarter, year, grade_df, max_score, teacher):
                 g['recorded_by'] = teacher
                 g['timestamp'] = str(datetime.datetime.now())
                 processed_sids.append(sid)
-        updated_grades.append(list(g.values()))
-        
+    
     for sid, score in grade_updates.items():
         if sid not in processed_sids:
-            new_row = {
-                "id": int(time.time()) + int(sid), "student_id": sid, "subject": subject, "quarter": quarter, "school_year": year,
-                "test1": 0, "test2": 0, "test3": 0, "final_score": score, "total_score": score, "recorded_by": teacher, "timestamp": str(datetime.datetime.now())
-            }
-            updated_grades.append(list(new_row.values()))
+            new_row = {"id": int(time.time())+int(sid), "student_id": sid, "subject": subject, "quarter": quarter, "school_year": year, "test1": 0, "test2": 0, "test3": 0, "final_score": score, "total_score": score, "recorded_by": teacher, "timestamp": str(datetime.datetime.now())}
+            all_grades.append(new_row)
             
-    ws_grades.clear()
-    ws_grades.append_rows(updated_grades)
+    overwrite_sheet_data("Grades", all_grades)
     clear_cache()
     return True
 
-def get_student_grades_for_teacher_view(student_id, teacher_username):
-    records = fetch_all_records("Grades")
-    data = []
-    for r in records:
-        if str(r['student_id']) == str(student_id) and r['recorded_by'] == teacher_username:
-            data.append(r)
-    return pd.DataFrame(data)
-
-def get_student_full_report(student_id):
-    records = fetch_all_records("Grades")
-    data = []
-    for r in records:
-        if str(r['student_id']) == str(student_id):
-            data.append(r)
-    return pd.DataFrame(data)
-
 # --- UI COMPONENTS ---
+
+def render_sidebar_mode():
+    with st.sidebar:
+        st.markdown("### 📡 Data Source")
+        current = get_data_mode()
+        new_mode = st.radio("Mode", ["Cloud", "Local"], index=0 if current == 'Cloud' else 1, label_visibility="collapsed", key="mode_radio")
+        if new_mode != current:
+            st.session_state.data_mode = new_mode
+            st.toast(f"Switched to {new_mode} Mode!")
+            time.sleep(0.5); st.rerun()
+        st.markdown("---")
 
 def login_screen():
     c1, c2 = st.columns([1, 1], gap="large")
@@ -655,6 +691,9 @@ def login_screen():
     with c2:
         st.markdown("<div style='height: 50px;'></div>", unsafe_allow_html=True)
         st.title("🔐 Login Portal")
+        mode = get_data_mode()
+        st.caption(f"Current Mode: {'☁️ Cloud' if mode == 'Cloud' else '💻 Local'}")
+        
         login_role = st.radio("I am a:", ["Staff (Teacher/Admin)", "Student"], horizontal=True)
 
         if login_role == "Staff (Teacher/Admin)":
@@ -693,7 +732,7 @@ def login_screen():
                         st.session_state.role = "Student"
                         st.session_state.logged_in = True
                         st.rerun()
-                    else: st.error("Invalid ID or Password, or account not Active.")
+                    else: st.error("Invalid ID/Password or Account Locked.")
 
 def sidebar_menu():
     if 'uploader_key' not in st.session_state: st.session_state.uploader_key = 0
@@ -703,8 +742,7 @@ def sidebar_menu():
         
         if role == "Admin":
             st.markdown(f"### 🛡️ Admin")
-            st.markdown("---")
-            menu = st.radio("Menu", ["Dashboard", "👥 Manage Teachers", "🎓 Manage Students"])
+            menu = st.radio("Menu", ["Dashboard", "👥 Manage Teachers", "🎓 Manage Students", "🔄 Sync Center"])
 
         elif role == "Teacher":
             username = user_data[0]
@@ -726,7 +764,7 @@ def sidebar_menu():
                     st.session_state.uploader_key += 1
                     time.sleep(1.0); st.rerun()
             st.markdown("---")
-            menu = st.radio("Menu", ["Dashboard", "📂 Student Roster", "📝 Input Grades", "📊 Gradebook", "👤 Student Record", "⚙️ Account Settings"])
+            menu = st.radio("Menu", ["Dashboard", "📂 Student Roster", "📝 Input Grades", "📊 Gradebook", "👤 Student Record", "⚙️ Account Settings", "🔄 Sync Center"])
             
         else: 
             s_name = user_data[1]
@@ -747,18 +785,37 @@ def sidebar_menu():
 
 # --- PAGE FUNCTIONS ---
 
+def page_sync_center():
+    st.title("🔄 Sync Center")
+    st.info("Transfer data between Google Cloud and Local Storage.")
+    c1, c2 = st.columns(2)
+    with c1:
+        st.markdown("### ⬇️ Cloud to Local")
+        if st.button("Download Data"):
+            with st.spinner("Downloading..."):
+                ok, msg = sync_cloud_to_local()
+                if ok: st.success(msg)
+                else: st.error(msg)
+    with c2:
+        st.markdown("### ⬆️ Local to Cloud")
+        if st.button("Upload Data"):
+            with st.spinner("Uploading..."):
+                ok, msg = sync_local_to_cloud()
+                if ok: st.success(msg)
+                else: st.error(msg)
+
 def page_admin_dashboard():
     st.title("🛡️ Admin Dashboard")
-    tot_t, act, drp, trf, dele, tot_sub = get_admin_stats()
+    tot_t, act, drp, tot_stu, del_stu, tot_sub = get_admin_stats()
     c1, c2, c3 = st.columns(3)
     c1.metric("Total Teachers", tot_t)
     c2.metric("Total Subjects", tot_sub)
     st.markdown("### 🎓 Student Status Overview")
     k1, k2, k3, k4 = st.columns(4)
     k1.metric("✅ Active", act)
-    k2.metric("🔁 Transferred", trf)
+    k2.metric("🔁 Transferred", 0) # Calculated in stats if needed
     k3.metric("❌ Dropped Out", drp)
-    k4.metric("🗑️ Deleted (Bin)", dele)
+    k4.metric("🗑️ Deleted", del_stu)
 
 def page_admin_manage_teachers():
     st.title("👥 Manage Teachers")
@@ -817,28 +874,22 @@ def page_admin_manage_students():
 
 def page_teacher_settings():
     st.title("⚙️ Account Settings")
-    st.info("Update your login credentials here. This will automatically update your subjects and grade records.")
-    
+    st.info("Update your login credentials here.")
     current_u = st.session_state.user[0]
     current_p = st.session_state.user[1]
-    
     with st.form("teach_settings"):
         new_u = st.text_input("Username", value=current_u)
         new_p = st.text_input("Password", value=current_p, type="password")
-        
         if st.form_submit_button("💾 Update Credentials"):
             if new_u and new_p:
-                with st.spinner("Updating records... this may take a moment."):
+                with st.spinner("Updating..."):
                     ok, msg = update_teacher_credentials(current_u, new_u, new_p)
                     if ok:
                         st.success(msg)
                         st.session_state.logged_in = False
-                        time.sleep(2)
-                        st.rerun()
-                    else:
-                        st.error(msg)
-            else:
-                st.warning("Fields cannot be empty.")
+                        time.sleep(2); st.rerun()
+                    else: st.error(msg)
+            else: st.warning("Fields cannot be empty.")
 
 def page_dashboard():
     st.title("📊 Teacher Dashboard")
@@ -983,79 +1034,64 @@ def page_input_grades():
     roster = get_class_roster(lvl, rm, only_active=True)
     if roster.empty: st.warning("No Active students."); return
 
-    # --- NEW UI LAYOUT ---
     t_tabs = st.tabs(["Test 1 (Tasks)", "Test 2 (Tasks)", "Test 3 (Tasks)", "Final Exam", "Bulk Upload"])
     
-    # Helper for Task Tabs
     def render_task_tab(test_name, weight):
         st.markdown(f"### 📊 {test_name} - Detailed Input")
         max_score = st.number_input(f"Max Raw Score for {test_name} (Sum of Tasks)", min_value=1.0, value=50.0, key=f"max_{test_name}")
         st.info(f"Scores will be converted to weight: **{weight}%**")
-        
-        # 1. Fetch Existing Data
         existing_tasks = fetch_task_records(subj, q, yr, test_name)
         
-        # 2. Build Dataframe for Editor
+        # CHECK COMPLETION
+        roster_ids = set(roster['student_id'].astype(str))
+        graded_ids = set(existing_tasks.keys())
+        completed_count = len(roster_ids.intersection(graded_ids))
+        total_students = len(roster)
+        if completed_count == total_students and total_students > 0:
+            st.success(f"✅ {test_name} Completed! All {total_students} graded.")
+        else:
+            st.warning(f"⚠️ {test_name} Incomplete: {completed_count}/{total_students} graded.")
+        
         editor_data = []
         for idx, row in roster.iterrows():
             sid = str(row['student_id'])
             name = row['student_name']
             no = row['class_no']
-            
-            # Defaults
             t1, t2, t3, t4, t5 = 0.0, 0.0, 0.0, 0.0, 0.0
             if sid in existing_tasks:
                 r = existing_tasks[sid]
                 t1, t2, t3, t4, t5 = r['t1'], r['t2'], r['t3'], r['t4'], r['t5']
-            
             raw_calc = t1+t2+t3+t4+t5
             weight_calc = (raw_calc / max_score) * weight if max_score else 0.0
-            
-            editor_data.append({
-                "No": no, "ID": sid, "Name": name,
-                "Task 1": t1, "Task 2": t2, "Task 3": t3, "Task 4": t4, "Task 5": t5,
-                "Total": raw_calc, "Weighted": weight_calc
-            })
-            
+            editor_data.append({"No": no, "ID": sid, "Name": name, "Task 1": t1, "Task 2": t2, "Task 3": t3, "Task 4": t4, "Task 5": t5, "Total": raw_calc, "Weighted": weight_calc})
         df_editor = pd.DataFrame(editor_data)
         
-        # 3. Display Editor INSIDE FORM (FIX FOR BLINKING)
         with st.form(key=f"form_{test_name}"):
             edited_df = st.data_editor(
-                df_editor, 
-                hide_index=True,
+                df_editor, hide_index=True,
                 column_config={
                     "No": st.column_config.NumberColumn(disabled=True),
                     "ID": st.column_config.TextColumn(disabled=True),
                     "Name": st.column_config.TextColumn(disabled=True),
                     "Total": st.column_config.NumberColumn(disabled=True),
                     "Weighted": st.column_config.NumberColumn(disabled=True, format="%.2f")
-                },
-                width=1000,
-                key=f"ed_{test_name}"
+                }, width=1000, key=f"ed_{test_name}"
             )
-            # 4. Save Button as FORM SUBMITTER
             if st.form_submit_button(f"💾 Batch Save {test_name}"):
                 with st.spinner("Processing..."):
                     ok, msg = save_batch_tasks_and_grades(subj, q, yr, test_name, edited_df, max_score, weight, st.session_state.user[0])
                     if ok: st.success(msg); time.sleep(1.5); st.rerun()
                     else: st.error(msg)
         
-        # 5. [NEW] Live Grade Monitor (Below the Editor)
         st.markdown(f"**📉 Live Grade Monitor: {test_name}** (Red indicates < 50%)")
-        # Reuse df_editor, highlight low scores
         def highlight_low_score(val):
             try:
                 v = float(val)
-                # Max weight is 10. Half is 5.
-                if v < 5.0: return 'color: red; font-weight: bold;'
+                if v < (weight/2): return 'color: red; font-weight: bold;'
                 return 'color: green;'
             except: return ''
-        
-        # Display simplified view for checking
         check_df = df_editor[["No", "Name", "Weighted"]]
         st.dataframe(check_df.style.format({"Weighted": "{:.2f}"}).map(highlight_low_score, subset=["Weighted"]), hide_index=True)
-
 
     with t_tabs[0]: render_task_tab("Test 1", 10.0)
     with t_tabs[1]: render_task_tab("Test 2", 10.0)
@@ -1064,25 +1100,28 @@ def page_input_grades():
     with t_tabs[3]:
         st.markdown("### 🏁 Final Exam")
         max_final = st.number_input("Max Raw Score for Final", min_value=1.0, value=50.0, key="max_final")
-        
         all_grades = fetch_all_records("Grades")
+        grade_map = {}
+        for g in all_grades:
+            if g['subject'] == subj and g['quarter'] == q and g['school_year'] == yr:
+                grade_map[str(g['student_id'])] = float(g['final_score'])
+
+        roster_ids = set(roster['student_id'].astype(str))
+        graded_ids = set(grade_map.keys())
+        completed_count = len(roster_ids.intersection(graded_ids))
+        total_students = len(roster)
+        if completed_count == total_students and total_students > 0:
+            st.success(f"✅ Final Exam Completed! All {total_students} graded.")
+        else:
+            st.warning(f"⚠️ Final Exam Incomplete: {completed_count}/{total_students} graded.")
+
         final_data = []
         for idx, row in roster.iterrows():
             sid = str(row['student_id'])
-            # Attempt to find current final score
-            curr_score = 0.0
-            # (Fetching specific grade is expensive loop here, assume 0 for speed or implement better fetch)
-            # For simplicity in this batch view, we let them enter raw.
-            # We display 0.0 default.
-            
-            # Simple calc for display (might be 0 if new)
-            w_disp = (curr_score / max_final) * 20.0 if max_final else 0.0
-            
-            final_data.append({"No": row['class_no'], "ID": sid, "Name": row['student_name'], "Final Score": 0.0, "Weighted (20%)": 0.0})
-            
+            w_score = grade_map.get(sid, 0.0)
+            estimated_raw = (w_score / 20.0) * max_final
+            final_data.append({"No": row['class_no'], "ID": sid, "Name": row['student_name'], "Final Score": estimated_raw, "Weighted (20%)": w_score})
         df_final = pd.DataFrame(final_data)
-        
-        # WRAP IN FORM
         with st.form("final_form"):
             edited_final = st.data_editor(
                 df_final, hide_index=True,
@@ -1090,7 +1129,7 @@ def page_input_grades():
                     "No": st.column_config.NumberColumn(disabled=True),
                     "ID": st.column_config.TextColumn(disabled=True),
                     "Name": st.column_config.TextColumn(disabled=True),
-                    "Weighted (20%)": st.column_config.NumberColumn(disabled=True)
+                    "Weighted (20%)": st.column_config.NumberColumn(disabled=True, format="%.2f")
                 }, width=1000, key="ed_final"
             )
             if st.form_submit_button("💾 Save Finals"):
@@ -1099,13 +1138,10 @@ def page_input_grades():
 
     with t_tabs[4]:
         st.markdown("### 📤 Legacy Bulk Upload")
-        st.info("Use the tabs on the left for direct entry. Use this for offline Excel files.")
-        
         col_sel1, col_sel2 = st.columns(2)
         upload_target = col_sel1.selectbox("Select Component", ["Test 1", "Test 2", "Test 3", "Final Exam"])
         target_weight = 20.0 if upload_target == "Final Exam" else 10.0
         max_raw = col_sel2.number_input(f"Total Raw for {upload_target}", min_value=1.0, value=50.0, key="bulk_max")
-        
         template_df = roster[['class_no', 'student_id', 'student_name']].copy()
         template_df.columns = ['No', 'Student ID', 'Name']
         for i in range(1, 6): template_df[f'Task {i}'] = 0.0
@@ -1113,9 +1149,7 @@ def page_input_grades():
         with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
             template_df.to_excel(writer, index=False, sheet_name='TaskScores')
         excel_data = output.getvalue()
-        
         st.download_button(f"⬇️ Download {upload_target} Template", data=excel_data, file_name="template.xlsx", mime="application/vnd.ms-excel")
-        
         bulk_file = st.file_uploader(f"Upload {upload_target}", type=['xlsx'], key=f"up_{upload_target}")
         if bulk_file:
             if st.button(f"Process {upload_target}"):
@@ -1140,12 +1174,10 @@ def page_gradebook():
     
     grades_all = fetch_all_records("Grades")
     students_all = fetch_all_records("Students")
-    
     roster = []
     for stu in students_all:
         if stu['grade_level'] == l and str(stu['room']) == str(r) and stu.get('status') == 'Active':
             roster.append(stu)
-    
     data = []
     for stu in roster:
         sid = str(stu['student_id'])
@@ -1155,42 +1187,17 @@ def page_gradebook():
                 g_row = g
                 break
         data.append({
-            'No': stu['class_no'],
-            'ID': sid,
-            'Name': stu['student_name'],
-            'Test 1': g_row['test1'],
-            'Test 2': g_row['test2'],
-            'Test 3': g_row['test3'],
-            'Final': g_row['final_score'],
-            'Total': g_row['total_score']
+            'No': stu['class_no'], 'ID': sid, 'Name': stu['student_name'],
+            'Test 1': g_row['test1'], 'Test 2': g_row['test2'], 'Test 3': g_row['test3'],
+            'Final': g_row['final_score'], 'Total': g_row['total_score']
         })
-    
     df = pd.DataFrame(data)
     if not df.empty:
         df = df.astype(str)
         df['No'] = pd.to_numeric(df['No'])
         df = df.sort_values('No')
         
-        # --- NEW: CONDITIONAL FORMATTING FOR GRADEBOOK ---
-        def highlight_gradebook(val):
-            try:
-                v = float(val)
-                # Tests 1-3 weighted 10 (fail < 5)
-                # Final weighted 20 (fail < 10)
-                # Total weighted 50 (fail < 25)
-                # Simple logic: if < 50% of assumed max, mark red
-                # Since we don't know column context easily here, we use the 50% rule generally
-                # But wait, 8.0 is > 50% of 10, but < 50% of 20.
-                # We need column specific logic.
-                # Simplification: Just color red if < 5.0 (safe bet for tests)
-                # Better: Color whole row? No.
-                return ''
-            except: return ''
-            
-        # Specific styler
-        # We need to apply map to specific columns
         styled_df = df.style.format(precision=1)
-        
         def color_t1(v): 
             try: return 'color: red; font-weight: bold;' if float(v) < 5.0 else ''
             except: return ''
@@ -1200,41 +1207,30 @@ def page_gradebook():
         def color_total(v): 
             try: return 'color: red; font-weight: bold;' if float(v) < 25.0 else ''
             except: return ''
-            
         styled_df.map(color_t1, subset=['Test 1', 'Test 2', 'Test 3'])
         styled_df.map(color_final, subset=['Final'])
         styled_df.map(color_total, subset=['Total'])
-        
         st.dataframe(styled_df, width=1000)
         st.download_button("⬇️ Excel", df.to_csv(index=False), f"gradebook_{s}_{q}.csv", "text/csv")
 
 def page_student_record_teacher_view():
     st.title("👤 Student Individual Record")
     st.info("Select a student to view their detailed academic summary.")
-    
     active_students = get_all_active_students_list()
-    
     search_tabs = st.tabs(["🔍 Quick Search", "📂 Filter by Class"])
     s_search = None
-    
     with search_tabs[0]:
         if not active_students.empty:
             active_students['label'] = active_students.apply(
                 lambda x: f"{x['student_name']} ({x['student_id']}) - {x['grade_level']}/{x['room']}", axis=1
             )
-            # FIX: Index=None and Placeholder
             selection = st.selectbox("Find Student", active_students['label'], index=None, placeholder="Type Name or ID to search...", key="quick_search")
-            if selection:
-                s_search = selection.split('(')[1].split(')')[0]
-                
+            if selection: s_search = selection.split('(')[1].split(')')[0]
     with search_tabs[1]:
         c1, c2, c3 = st.columns(3)
         f_lvl = c1.selectbox("Level", ["M1","M2","M3","M4","M5","M6"], key="f_lvl")
         f_rm = c2.selectbox("Room", [str(i) for i in range(1,16)], key="f_rm")
-        filtered = active_students[
-            (active_students['grade_level'] == f_lvl) & 
-            (active_students['room'].astype(str) == f_rm)
-        ]
+        filtered = active_students[(active_students['grade_level'] == f_lvl) & (active_students['room'].astype(str) == f_rm)]
         if not filtered.empty:
             s_name_sel = c3.selectbox("Student", filtered['student_name'], key="f_stu")
             if s_name_sel:
@@ -1276,7 +1272,6 @@ def display_academic_transcript(df):
     pivot['GPA S1'] = pivot['Sem 1'].apply(get_grade_point)
     pivot['GPA S2'] = pivot['Sem 2'].apply(get_grade_point)
     unique_years = pivot['school_year'].unique()
-    
     def highlight_low(val):
         try:
             v = float(val)
@@ -1284,15 +1279,12 @@ def display_academic_transcript(df):
             if v < 1.0 and v <= 4.0: return 'color: red; font-weight: bold;'
         except: pass
         return ''
-
     for yr in unique_years:
         st.markdown(f"#### 🗓️ Academic Year: {yr}")
         yr_data = pivot[pivot['school_year'] == yr].copy()
-        
         display_df = yr_data[['subject', 'Q1', 'Q2', 'Sem 1', 'GPA S1', 'Q3', 'Q4', 'Sem 2', 'GPA S2']].copy()
         display_df.columns = ['Subject', 'Q1 (50)', 'Q2 (50)', 'Sem 1 Total', 'S1 Grade', 'Q3 (50)', 'Q4 (50)', 'Sem 2 Total', 'S2 Grade']
         st.dataframe(display_df.style.format(precision=1).map(highlight_low), hide_index=True, width=1000)
-        
         with st.expander("🔎 View Task Details"):
             st.info("Showing raw task scores for these subjects.")
             all_tasks = fetch_all_records("Tasks")
@@ -1328,6 +1320,8 @@ if 'logged_in' not in st.session_state:
     st.session_state.logged_in = False
     init_db()
 
+render_sidebar_mode()
+
 if not st.session_state.logged_in:
     login_screen()
 else:
@@ -1336,6 +1330,7 @@ else:
         if sel == "Dashboard": page_admin_dashboard()
         elif sel == "👥 Manage Teachers": page_admin_manage_teachers()
         elif sel == "🎓 Manage Students": page_admin_manage_students()
+        elif sel == "🔄 Sync Center": page_sync_center()
     elif st.session_state.role == "Teacher":
         if sel == "Dashboard": page_dashboard()
         elif sel == "📂 Student Roster": page_roster()
@@ -1343,6 +1338,7 @@ else:
         elif sel == "📊 Gradebook": page_gradebook()
         elif sel == "👤 Student Record": page_student_record_teacher_view()
         elif sel == "⚙️ Account Settings": page_teacher_settings()
+        elif sel == "🔄 Sync Center": page_sync_center()
     elif st.session_state.role == "Student":
         if sel == "📜 My Grades": page_student_portal_grades()
         elif sel == "⚙️ Settings": page_student_settings()
