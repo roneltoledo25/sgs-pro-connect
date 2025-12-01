@@ -7,6 +7,8 @@ import gspread
 import json
 import os
 import platform 
+import time
+import random
 from oauth2client.service_account import ServiceAccountCredentials
 from PIL import Image
 import base64
@@ -121,31 +123,63 @@ def init_db():
             except Exception as e:
                 print(f"Cloud Init Error: {e}")
 
-@st.cache_data(ttl=5)
+# Increase cache time to 60s to reduce API calls (Prevents Quota Limits)
+@st.cache_data(ttl=60)
 def fetch_all_records(sheet_name):
+    max_retries = 3
+    base_delay = 2  # Seconds
+    
     mode = get_data_mode()
-    if mode == 'Cloud':
-        sh = get_cloud_connection()
-        if not sh: return []
-        
-        try:
-            # 1. Try to fetch the sheet normally
-            return sh.worksheet(sheet_name).get_all_records()
-        except gspread.exceptions.WorksheetNotFound:
-            # 2. If NOT FOUND, run the self-repair function
-            print(f"⚠️ Sheet '{sheet_name}' missing. Attempting self-repair...")
-            init_db()
-            # 3. Try to fetch again after repair
-            return sh.worksheet(sheet_name).get_all_records()
-            
-    elif mode == 'Local':
+    
+    # --- LOCAL MODE (Simpler, no API limits) ---
+    if mode == 'Local':
         init_db()
         try:
             df = pd.read_excel(LOCAL_FILE, sheet_name=sheet_name)
-            for col in ['student_id', 'password', 'username', 'teacher_username']:
+            # Ensure text columns are strings
+            cols_to_str = ['student_id', 'password', 'username', 'teacher_username']
+            for col in cols_to_str:
                 if col in df.columns: df[col] = df[col].astype(str).replace('nan', '')
             return df.fillna("").to_dict('records')
         except: return []
+
+    # --- CLOUD MODE (Needs protection) ---
+    elif mode == 'Cloud':
+        for attempt in range(max_retries):
+            try:
+                sh = get_cloud_connection()
+                if not sh: return []
+                
+                # Attempt to fetch
+                return sh.worksheet(sheet_name).get_all_records()
+                
+            except gspread.exceptions.WorksheetNotFound:
+                # ERROR 1: Sheet is missing. Fix it, then retry loop will run again.
+                print(f"⚠️ Sheet '{sheet_name}' missing. Repairing...")
+                init_db() 
+                time.sleep(1) # Short pause before retrying
+                continue # Go to next attempt
+                
+            except gspread.exceptions.APIError as e:
+                # ERROR 2: Google is busy or rate limited.
+                if attempt < max_retries - 1:
+                    # Exponential Backoff: Wait 2s, then 4s, then 8s...
+                    sleep_time = base_delay * (2 ** attempt) + random.uniform(0, 1)
+                    print(f"⚠️ API Error. Retrying in {sleep_time:.2f}s...")
+                    time.sleep(sleep_time)
+                    continue
+                else:
+                    # If we failed 3 times, return empty list (don't crash app)
+                    st.error(f"Connection failed after multiple retries. Please refresh.")
+                    return []
+            
+            except Exception as e:
+                # Catch-all for other weird network errors
+                print(f"Unexpected error: {e}")
+                return []
+
+    return []
+
 
 def overwrite_sheet_data(sheet_name, data_list_of_dicts):
     mode = get_data_mode()
