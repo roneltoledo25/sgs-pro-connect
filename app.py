@@ -127,7 +127,17 @@ def fetch_all_records(sheet_name):
     if mode == 'Cloud':
         sh = get_cloud_connection()
         if not sh: return []
-        return sh.worksheet(sheet_name).get_all_records()
+        
+        try:
+            # 1. Try to fetch the sheet normally
+            return sh.worksheet(sheet_name).get_all_records()
+        except gspread.exceptions.WorksheetNotFound:
+            # 2. If NOT FOUND, run the self-repair function
+            print(f"⚠️ Sheet '{sheet_name}' missing. Attempting self-repair...")
+            init_db()
+            # 3. Try to fetch again after repair
+            return sh.worksheet(sheet_name).get_all_records()
+            
     elif mode == 'Local':
         init_db()
         try:
