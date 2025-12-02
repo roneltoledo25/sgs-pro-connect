@@ -7,6 +7,7 @@ import gspread
 import json
 import os
 import socket
+import sqlite3
 from oauth2client.service_account import ServiceAccountCredentials
 from PIL import Image
 import base64
@@ -25,19 +26,20 @@ st.markdown("""
     .main { padding-top: 2rem; }
     h1, h2, h3 { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; font-weight: 600; letter-spacing: -0.5px; }
     
-    /* STATUS BAR */
+    /* STATUS BAR & METRICS */
     [data-testid="stMetric"] {
         background-color: var(--secondary-background-color);
         border: 1px solid rgba(128, 128, 128, 0.2);
         padding: 15px;
         border-radius: 10px;
         text-align: center;
+        box-shadow: 0 2px 5px rgba(0,0,0,0.05);
     }
     
     .stButton > button { background: linear-gradient(135deg, #2b5876 0%, #4e4376 100%); color: white !important; border: none; border-radius: 8px; font-weight: 600; letter-spacing: 0.5px; padding: 0.6rem 1.2rem; transition: all 0.3s ease; box-shadow: 0 2px 5px rgba(0,0,0,0.1); }
     .stButton > button:hover { transform: translateY(-2px); box-shadow: 0 5px 15px rgba(0,0,0,0.2); opacity: 0.95; }
     
-    /* BIGGER TEXT FOR INPUTS */
+    /* INPUTS & TABLES */
     div[data-testid="stDataEditor"] * { font-size: 1.2rem !important; }
     div[data-testid="stDataFrame"] * { font-size: 1.2rem !important; }
     label { font-size: 1.1rem !important; }
@@ -47,13 +49,13 @@ st.markdown("""
 
 # --- CONSTANTS ---
 SHEET_NAME = "SGS_Database" 
-LOCAL_FILE = "sgs_local_data.xlsx"
+LOCAL_DB = "sgs_local_db.sqlite"
 SCHOOL_CODE = "SK2025"
 STUDENT_STATUSES = ["Active", "Transferred", "Dropped Out", "Graduate", "Deleted"]
 
-# --- DATA MANAGER (OPTIMIZED) ---
+# --- DATA MANAGER ---
 
-@st.cache_data(ttl=15, show_spinner=False)
+@st.cache_data(ttl=30, show_spinner=False)
 def is_online():
     try:
         socket.create_connection(("8.8.8.8", 53), timeout=1.0)
@@ -81,71 +83,51 @@ def get_cloud_connection():
 
 @st.cache_resource
 def init_db():
-    required_sheets = ["Users", "Subjects", "Students", "Grades", "Tasks", "Config"]
+    conn = sqlite3.connect(LOCAL_DB)
+    tables = {
+        "Users": ["username", "password", "role", "profile_pic"],
+        "Subjects": ["id", "teacher_username", "subject_name"],
+        "Students": ["student_id", "student_name", "class_no", "grade_level", "room", "photo", "password", "status"],
+        "Grades": ["id", "student_id", "subject", "quarter", "school_year", "test1", "test2", "test3", "final_score", "total_score", "recorded_by", "timestamp"],
+        "Config": ["uid", "subject", "quarter", "year", "test_name", "task_name", "max_score"]
+    }
     task_cols = ["uid", "student_id", "subject", "quarter", "school_year", "test_name"]
     for i in range(1, 11): task_cols.append(f"t{i}") 
     task_cols.append("raw_total")
+    tables["Tasks"] = task_cols
 
-    if not os.path.exists(LOCAL_FILE):
-        with pd.ExcelWriter(LOCAL_FILE, engine='xlsxwriter') as writer:
-            pd.DataFrame([["admin", "admin123", "Admin", ""]], columns=["username", "password", "role", "profile_pic"]).to_excel(writer, sheet_name="Users", index=False)
-            pd.DataFrame(columns=["id", "teacher_username", "subject_name"]).to_excel(writer, sheet_name="Subjects", index=False)
-            pd.DataFrame(columns=["student_id", "student_name", "class_no", "grade_level", "room", "photo", "password", "status"]).to_excel(writer, sheet_name="Students", index=False)
-            pd.DataFrame(columns=["id", "student_id", "subject", "quarter", "school_year", "test1", "test2", "test3", "final_score", "total_score", "recorded_by", "timestamp"]).to_excel(writer, sheet_name="Grades", index=False)
-            pd.DataFrame(columns=task_cols).to_excel(writer, sheet_name="Tasks", index=False)
-            pd.DataFrame(columns=["uid", "subject", "quarter", "year", "test_name", "task_name", "max_score"]).to_excel(writer, sheet_name="Config", index=False)
-    else:
-        try:
-            current_sheets = pd.read_excel(LOCAL_FILE, sheet_name=None)
-            needs_update = False
-            for sheet in required_sheets:
-                if sheet not in current_sheets:
-                    new_df = pd.DataFrame()
-                    if sheet == "Users": new_df = pd.DataFrame([["admin", "admin123", "Admin", ""]], columns=["username", "password", "role", "profile_pic"])
-                    elif sheet == "Config": new_df = pd.DataFrame(columns=["uid", "subject", "quarter", "year", "test_name", "task_name", "max_score"])
-                    elif sheet == "Tasks": new_df = pd.DataFrame(columns=task_cols)
-                    current_sheets[sheet] = new_df
-                    needs_update = True
-                
-                if sheet == "Tasks":
-                    existing_cols = current_sheets[sheet].columns.tolist()
-                    for col in task_cols:
-                        if col not in existing_cols:
-                            current_sheets[sheet][col] = 0
-                            needs_update = True
-
-            if needs_update:
-                with pd.ExcelWriter(LOCAL_FILE, engine='xlsxwriter') as writer:
-                    for name, df in current_sheets.items(): df.to_excel(writer, sheet_name=name, index=False)
-        except: pass
-    
+    for table_name, columns in tables.items():
+        query = f"SELECT count(name) FROM sqlite_master WHERE type='table' AND name='{table_name}'"
+        cursor = conn.execute(query)
+        if cursor.fetchone()[0] == 0:
+            if table_name == "Users":
+                df = pd.DataFrame([["admin", "admin123", "Admin", ""]], columns=columns)
+            else:
+                df = pd.DataFrame(columns=columns)
+            df.to_sql(table_name, conn, index=False)
+            
     if get_data_mode() == 'Cloud':
-        sh = get_cloud_connection()
-        if sh:
-            try:
+        try:
+            sh = get_cloud_connection()
+            if sh:
                 titles = [w.title for w in sh.worksheets()]
-                required_schema = {
-                    "Users": ["username", "password", "role", "profile_pic"],
-                    "Subjects": ["id", "teacher_username", "subject_name"],
-                    "Students": ["student_id", "student_name", "class_no", "grade_level", "room", "photo", "password", "status"],
-                    "Grades": ["id", "student_id", "subject", "quarter", "school_year", "test1", "test2", "test3", "final_score", "total_score", "recorded_by", "timestamp"],
-                    "Tasks": task_cols,
-                    "Config": ["uid", "subject", "quarter", "year", "test_name", "task_name", "max_score"]
-                }
-                for sheet_name, headers in required_schema.items():
-                    if sheet_name not in titles:
-                        ws = sh.add_worksheet(sheet_name, 100, len(headers))
-                        ws.append_row(headers)
-                        if sheet_name == "Users": ws.append_row(["admin", "admin123", "Admin", ""])
-            except Exception as e: print(f"Cloud Init Error: {e}")
+                for t in tables.keys():
+                    if t not in titles:
+                        ws = sh.add_worksheet(t, 100, len(tables[t]))
+                        ws.append_row(tables[t])
+                        if t == "Users": ws.append_row(["admin", "admin123", "Admin", ""])
+        except: pass
+    conn.close()
 
 @st.cache_data(ttl=60)
 def fetch_all_records(sheet_name):
     mode = get_data_mode()
     if mode == 'Local':
         try:
-            df = pd.read_excel(LOCAL_FILE, sheet_name=sheet_name)
-            cols_to_str = ['student_id', 'password', 'username', 'teacher_username']
+            conn = sqlite3.connect(LOCAL_DB)
+            df = pd.read_sql(f"SELECT * FROM {sheet_name}", conn)
+            conn.close()
+            cols_to_str = ['student_id', 'password', 'username', 'teacher_username', 'ID']
             for col in cols_to_str:
                 if col in df.columns: df[col] = df[col].astype(str).replace('nan', '')
             return df.fillna("").to_dict('records')
@@ -164,7 +146,9 @@ def fetch_all_records(sheet_name):
 
 def fetch_all_records_local_fallback(sheet_name):
     try:
-        df = pd.read_excel(LOCAL_FILE, sheet_name=sheet_name)
+        conn = sqlite3.connect(LOCAL_DB)
+        df = pd.read_sql(f"SELECT * FROM {sheet_name}", conn)
+        conn.close()
         return df.fillna("").to_dict('records')
     except: return []
 
@@ -173,39 +157,47 @@ def perform_login_sync():
         try:
             sh = get_cloud_connection()
             if not sh: return
+            conn = sqlite3.connect(LOCAL_DB)
             sheets = ["Users", "Subjects", "Students", "Grades", "Tasks", "Config"]
-            with pd.ExcelWriter(LOCAL_FILE, engine='xlsxwriter') as writer:
-                for s in sheets:
-                    try:
-                        data = sh.worksheet(s).get_all_records()
-                        pd.DataFrame(data).to_excel(writer, sheet_name=s, index=False)
-                    except: pass
+            for s in sheets:
+                try:
+                    data = sh.worksheet(s).get_all_records()
+                    if data:
+                        df = pd.DataFrame(data)
+                        df.to_sql(s, conn, if_exists='replace', index=False)
+                except: pass
+            conn.close()
             return True
         except: return False
     return False
 
 def overwrite_sheet_data(sheet_name, data_list_of_dicts):
     try:
-        try: all_sheets = pd.read_excel(LOCAL_FILE, sheet_name=None)
-        except: all_sheets = {}
-        new_df = pd.DataFrame(data_list_of_dicts)
-        all_sheets[sheet_name] = new_df
-        with pd.ExcelWriter(LOCAL_FILE, engine='xlsxwriter') as writer:
-            for name, df in all_sheets.items(): df.fillna("").to_excel(writer, sheet_name=name, index=False)
-    except Exception as e: print(f"❌ Local Backup Failed: {e}")
-    
-    if get_data_mode() == 'Cloud':
-        sh = get_cloud_connection()
-        if sh:
-            ws = sh.worksheet(sheet_name)
-            if len(data_list_of_dicts) > 0:
-                headers = list(data_list_of_dicts[0].keys())
-                rows = [headers] + [list(d.values()) for d in data_list_of_dicts]
-                ws.clear(); ws.append_rows(rows)
-            else: ws.clear()
-        else: st.warning("⚠️ Saved LOCALLY only (Cloud disconnected).")
+        conn = sqlite3.connect(LOCAL_DB)
+        df = pd.DataFrame(data_list_of_dicts)
+        df.to_sql(sheet_name, conn, if_exists='replace', index=False)
+        conn.close()
+    except Exception as e:
+        print(f"Local Save Error: {e}")
 
-def clear_cache(): st.cache_data.clear()
+    if get_data_mode() == 'Cloud':
+        try:
+            sh = get_cloud_connection()
+            if sh:
+                ws = sh.worksheet(sheet_name)
+                if len(data_list_of_dicts) > 0:
+                    headers = list(data_list_of_dicts[0].keys())
+                    rows = [headers] + [list(d.values()) for d in data_list_of_dicts]
+                    ws.clear()
+                    ws.append_rows(rows)
+                else: ws.clear()
+        except:
+            st.warning("⚠️ Saved LOCALLY. Cloud update failed (Connection unstable).")
+    else:
+        st.warning("⚠️ Saved LOCALLY only (Offline Mode).")
+
+def clear_cache():
+    st.cache_data.clear()
 
 # --- HELPER FUNCTIONS ---
 def get_school_years():
@@ -750,9 +742,12 @@ def login_screen():
         st.image("logo/images.jpeg", width=300)
     with c2:
         st.markdown("<div style='height: 50px;'></div>", unsafe_allow_html=True)
-        st.title("🔐 Login Portal")
+        st.markdown("<h1 style='text-align: center;'>🔐 Login Portal</h1>", unsafe_allow_html=True)
+        st.markdown("<p class='slogan-style'>Your School, Connected. Anytime, Anywhere.</p>", unsafe_allow_html=True)
         mode = get_data_mode()
-        st.caption(f"Current Mode: {mode}")
+        status_color = "var(--success-color)" if mode == "Cloud" else "var(--warning-color)"
+        st.markdown(f"<p style='text-align:center;'>Status: <span style='color:{status_color}; font-weight:bold'>{mode}</span></p>", unsafe_allow_html=True)
+        
         tab1, tab2 = st.tabs(["Staff Login", "Student Portal"])
         with tab1:
             with st.form("staff_login"):
@@ -797,6 +792,7 @@ def sidebar_menu():
     with st.sidebar:
         role = st.session_state.get('role', 'Teacher')
         user_data = st.session_state.user
+        
         if role == "Admin":
             st.markdown(f"### 🛡️ Admin")
             menu = st.radio("Menu", ["Dashboard", "👥 Manage Teachers", "🎓 Manage Students"])
@@ -806,6 +802,7 @@ def sidebar_menu():
             pic = user_data[3]
             if pic: st.image(Image.open(io.BytesIO(pic)), width=120)
             else: st.image("https://cdn-icons-png.flaticon.com/512/1995/1995539.png", width=120)
+            
             with st.expander("📷 Photo"):
                 ukey = st.session_state.uploader_key
                 up = st.file_uploader("Up", type=['jpg','png'], label_visibility="collapsed", key=f"t_up_{ukey}")
@@ -817,6 +814,7 @@ def sidebar_menu():
                     st.toast("✅ Photo Updated!")
                     st.session_state.uploader_key += 1
                     time.sleep(1.0); st.rerun()
+            
             st.markdown("---")
             menu = st.radio("Menu", ["Dashboard", "📂 Student Roster", "📝 Input Grades", "📊 Gradebook", "👤 Student Record", "⚙️ Account Settings"])
         else:
@@ -829,13 +827,81 @@ def sidebar_menu():
             st.caption(f"ID: {s_id}")
             st.markdown("---")
             menu = st.radio("Menu", ["📜 My Grades", "⚙️ Settings"])
+        
         st.markdown("---")
         if st.button("🚪 Log Out", width="stretch"):
             st.session_state.logged_in = False
             st.rerun()
+        
         return menu
 
 # --- PAGE FUNCTIONS ---
+
+def page_dashboard():
+    st.title("📊 Dashboard")
+    user = st.session_state.user[0]
+    
+    # 1. Fetch Data
+    subs = get_teacher_subjects_full(user)
+    all_users = fetch_all_records("Users")
+    teacher_count = sum(1 for u in all_users if u.get('role') == 'Teacher')
+    
+    total_active_students = 0
+    subject_details = []
+    
+    # 2. Calc Active Students per Subject
+    for s_id, s_name in subs:
+        cnt = get_subject_student_count(s_name)
+        total_active_students += cnt
+        subject_details.append((s_id, s_name, cnt))
+        
+    # 3. Metrics Row
+    c1, c2, c3 = st.columns(3)
+    c1.metric("My Subjects", len(subs))
+    c2.metric("Total Active Students", total_active_students)
+    c3.metric("Total Teachers", teacher_count)
+    
+    # 4. Subject Cards
+    st.markdown("### 📚 My Subjects")
+    st.markdown("---")
+    
+    if not subject_details:
+        st.info("You haven't added any subjects yet.")
+    
+    for s_id, s_name, cnt in subject_details:
+        label = f"📘 {s_name} ({cnt} Students)"
+        with st.expander(label):
+            st.caption(f"Manage settings for {s_name}")
+            c_a, c_b = st.columns([3, 1])
+            new_name = c_a.text_input("Rename Subject", value=s_name, key=f"ren_{s_id}")
+            if c_b.button("Update", key=f"btn_ren_{s_id}"):
+                update_subject(s_id, new_name)
+                st.success("Renamed!")
+                time.sleep(1)
+                st.rerun()
+            
+            st.markdown("---")
+            if st.button("🗑️ Delete Subject", key=f"btn_del_{s_id}", help="This will remove the subject from your list."):
+                delete_subject(s_id)
+                st.warning("Deleted!")
+                time.sleep(1)
+                st.rerun()
+
+    # Add New Subject Section
+    st.markdown("### ➕ Add New Subject")
+    with st.form("add_sub"):
+        c_add1, c_add2 = st.columns([3, 1])
+        new_s = c_add1.text_input("Subject Name", placeholder="e.g. Mathematics M1")
+        if c_add2.form_submit_button("Add Subject"):
+            if new_s:
+                ok, msg = add_subject(user, new_s)
+                if ok: 
+                    st.success(msg)
+                    time.sleep(1)
+                    st.rerun()
+                else: 
+                    st.error(msg)
+
 def page_admin_dashboard():
     st.title("🛡️ Admin Dashboard")
     u, a, d, t, b, subs = get_admin_stats()
@@ -850,18 +916,31 @@ def page_admin_manage_teachers():
     teachers = get_all_teachers_with_counts()
     if not teachers.empty: st.dataframe(teachers, width=1000, hide_index=True)
     else: st.info("No teachers found.")
-    c1, c2 = st.columns(2)
-    with c1.form("reset_t_pass"):
-        t_user = st.text_input("Username to Reset")
-        t_pass = st.text_input("New Password")
-        if st.form_submit_button("Reset Password"):
-            admin_reset_teacher_password(t_user, t_pass)
-            st.success(f"Password for {t_user} reset.")
-    with c2:
+    
+    t1, t2, t3 = st.tabs(["Reset Password", "Delete Teacher", "Update Photo"])
+    
+    with t1:
+        with st.form("reset_t_pass"):
+            t_user = st.text_input("Username to Reset")
+            t_pass = st.text_input("New Password")
+            if st.form_submit_button("Reset Password"):
+                admin_reset_teacher_password(t_user, t_pass)
+                st.success(f"Password for {t_user} reset.")
+    
+    with t2:
         st.markdown("### 🗑️ Delete Teacher")
         del_t = st.text_input("Enter Username to DELETE")
         if st.button("Delete Teacher"):
             delete_teacher(del_t); st.warning(f"Teacher {del_t} deleted."); time.sleep(1); st.rerun()
+            
+    with t3:
+        st.markdown("### 📷 Update Teacher Photo")
+        if not teachers.empty:
+            target_t = st.selectbox("Select Teacher", teachers['username'].unique())
+            up_t = st.file_uploader("Upload New Photo", type=['jpg','png'], key="adm_t_up")
+            if up_t and st.button("Save Photo"):
+                update_teacher_pic(target_t, up_t.getvalue())
+                st.success(f"Photo for {target_t} updated!")
 
 def page_admin_manage_students():
     st.title("🎓 Manage Students (Admin)")
@@ -881,6 +960,13 @@ def page_admin_manage_students():
                 if st.form_submit_button("Reset Password"):
                     admin_reset_student_password(target_id, new_pass)
                     st.success(f"Password for {target_id} reset.")
+            
+            with c2.expander("📷 Update Student Photo"):
+                up_s = st.file_uploader("New Photo", type=['jpg','png'], key="adm_s_up")
+                if up_s and st.button("Save Student Photo"):
+                    update_student_pic(target_id, up_s.getvalue())
+                    st.success("Photo Updated!")
+            
             if c3.button("🗑️ Hard Delete", key="del_stu_adm"):
                 delete_student_admin(target_id)
                 st.warning(f"Student {target_id} permanently deleted."); time.sleep(1); st.rerun()
@@ -895,31 +981,83 @@ def page_admin_manage_students():
                 sid_only = res_id.split(" - ")[0]
                 admin_restore_student(sid_only); st.success(f"Student {sid_only} restored!"); time.sleep(1.5); st.rerun()
         else: st.info("Bin is empty.")
-
+        
 def page_dashboard():
     st.title("📊 Dashboard")
     user = st.session_state.user[0]
+    
+    # --- 1. FETCH DATA ---
+    # Get Teacher's Subjects
     subs = get_teacher_subjects_full(user)
-    total_students = 0
-    for s_id, s_name in subs: total_students += get_subject_student_count(s_name)
-    c1, c2 = st.columns(2)
-    c1.metric("My Subjects", len(subs))
-    c2.metric("Total Students Graded", total_students)
-    st.markdown("### 📚 My Subjects")
+    
+    # Get System-Wide Teacher Count
+    all_users = fetch_all_records("Users")
+    teacher_count = sum(1 for u in all_users if u.get('role') == 'Teacher')
+    
+    # Get System-Wide Student Count (NEW FIX)
+    all_active_students = get_all_active_students_list()
+    total_system_students = len(all_active_students)
+    
+    # Calculate "My Students" for the subject breakdown
+    subject_details = []
+    my_total_students = 0
     for s_id, s_name in subs:
-        with st.expander(f"📘 {s_name}"):
-            c_a, c_b = st.columns([3, 1])
-            new_name = c_a.text_input("Rename", value=s_name, key=f"ren_{s_id}")
-            if c_b.button("Update", key=f"btn_ren_{s_id}"):
-                update_subject(s_id, new_name); st.success("Renamed!"); time.sleep(1); st.rerun()
-            if c_b.button("Delete", key=f"btn_del_{s_id}"):
-                delete_subject(s_id); st.warning("Deleted!"); time.sleep(1); st.rerun()
+        cnt = get_subject_student_count(s_name)
+        my_total_students += cnt
+        subject_details.append((s_id, s_name, cnt))
+        
+    # --- 2. METRICS ROW ---
+    c1, c2, c3 = st.columns(3)
+    
+    # Metric 1: My Subjects
+    c1.metric("My Subjects", len(subs), help=f"You teach {my_total_students} students total")
+    
+    # Metric 2: System-Wide Active Students (FIXED)
+    c2.metric("Total Active Students", total_system_students, delta="School Wide", delta_color="off")
+    
+    # Metric 3: System-Wide Teachers
+    c3.metric("Total Teachers", teacher_count, delta="School Wide", delta_color="off")
+    
+    # --- 3. SUBJECT CARDS ---
+    st.markdown("### 📚 My Subjects")
     st.markdown("---")
-    with st.form("add_sub"):
-        new_s = st.text_input("Add New Subject")
-        if st.form_submit_button("Add"):
-            if new_s: ok, msg = add_subject(user, new_s); st.success(msg) if ok else st.error(msg); time.sleep(1); st.rerun()
+    
+    if not subject_details:
+        st.info("You haven't added any subjects yet.")
+    
+    for s_id, s_name, cnt in subject_details:
+        label = f"📘 {s_name} ({cnt} Students)"
+        with st.expander(label):
+            st.caption(f"Manage settings for {s_name}")
+            c_a, c_b = st.columns([3, 1])
+            new_name = c_a.text_input("Rename Subject", value=s_name, key=f"ren_{s_id}")
+            if c_b.button("Update", key=f"btn_ren_{s_id}"):
+                update_subject(s_id, new_name)
+                st.success("Renamed!")
+                time.sleep(1)
+                st.rerun()
+            
+            st.markdown("---")
+            if st.button("🗑️ Delete Subject", key=f"btn_del_{s_id}", help="This will remove the subject from your list."):
+                delete_subject(s_id)
+                st.warning("Deleted!")
+                time.sleep(1)
+                st.rerun()
 
+    # --- 4. ADD NEW SUBJECT FORM ---
+    st.markdown("### ➕ Add New Subject")
+    with st.form("add_sub"):
+        c_add1, c_add2 = st.columns([3, 1])
+        new_s = c_add1.text_input("Subject Name", placeholder="e.g. Mathematics M1")
+        if c_add2.form_submit_button("Add Subject"):
+            if new_s:
+                ok, msg = add_subject(user, new_s)
+                if ok: 
+                    st.success(msg)
+                    time.sleep(1)
+                    st.rerun()
+                else: 
+                    st.error(msg)
 def page_roster():
     st.title("📂 Student Roster Management")
     c1, c2 = st.columns(2)
