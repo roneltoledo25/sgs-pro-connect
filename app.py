@@ -23,27 +23,80 @@ st.set_page_config(
 # --- CSS STYLING ---
 st.markdown("""
 <style>
-    .main { padding-top: 2rem; }
-    h1, h2, h3 { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; font-weight: 600; letter-spacing: -0.5px; }
+    /* GLOBAL FONTS */
+    @import url('https://fonts.googleapis.com/css2?family=Poppins:wght@300;400;600&display=swap');
     
-    /* STATUS BAR & METRICS */
+    html, body, [class*="css"]  {
+        font-family: 'Poppins', sans-serif;
+    }
+    
+    /* METRIC CARDS - Adaptive Theme */
     [data-testid="stMetric"] {
         background-color: var(--secondary-background-color);
         border: 1px solid rgba(128, 128, 128, 0.2);
         padding: 15px;
         border-radius: 10px;
         text-align: center;
-        box-shadow: 0 2px 5px rgba(0,0,0,0.05);
+        box-shadow: 0 4px 6px rgba(0,0,0,0.1);
     }
     
-    .stButton > button { background: linear-gradient(135deg, #2b5876 0%, #4e4376 100%); color: white !important; border: none; border-radius: 8px; font-weight: 600; letter-spacing: 0.5px; padding: 0.6rem 1.2rem; transition: all 0.3s ease; box-shadow: 0 2px 5px rgba(0,0,0,0.1); }
-    .stButton > button:hover { transform: translateY(-2px); box-shadow: 0 5px 15px rgba(0,0,0,0.2); opacity: 0.95; }
+    [data-testid="stMetric"] label {
+        color: var(--text-color) !important;
+    }
     
-    /* INPUTS & TABLES */
-    div[data-testid="stDataEditor"] * { font-size: 1.2rem !important; }
-    div[data-testid="stDataFrame"] * { font-size: 1.2rem !important; }
-    label { font-size: 1.1rem !important; }
-    .stRadio > label { font-size: 1.1rem !important; }
+    [data-testid="stMetric"] [data-testid="stMetricValue"] {
+        color: var(--primary-color) !important;
+    }
+
+    /* BUTTONS */
+    .stButton > button {
+        background: linear-gradient(90deg, #2b5876 0%, #4e4376 100%);
+        color: white !important;
+        border: none;
+        border-radius: 10px;
+        font-weight: 600;
+        padding: 0.6rem 1.5rem;
+        transition: all 0.3s ease;
+        box-shadow: 0 4px 6px rgba(0,0,0,0.2);
+    }
+    .stButton > button:hover {
+        transform: scale(1.02);
+        box-shadow: 0 6px 12px rgba(0,0,0,0.3);
+        color: #fff !important;
+    }
+
+    /* TABLES - Text Size & Visibility */
+    div[data-testid="stDataEditor"] * { 
+        font-size: 1.15rem !important; 
+    }
+    div[data-testid="stDataFrame"] * { 
+        font-size: 1.15rem !important; 
+    }
+    
+    /* RADIO BUTTONS & INPUTS */
+    .stRadio > label { 
+        font-size: 1.1rem !important; 
+        color: var(--text-color);
+    }
+    
+    /* SLOGAN TEXT */
+    .slogan-style {
+        font-size: 1.2rem;
+        font-weight: 300;
+        font-style: italic;
+        color: var(--text-color);
+        opacity: 0.8;
+        margin-bottom: 10px;
+        text-align: center;
+    }
+    
+    /* LOGIN HEADER */
+    h1 {
+        background: -webkit-linear-gradient(#2b5876, #4e4376);
+        -webkit-background-clip: text;
+        -webkit-text-fill-color: transparent;
+        text-shadow: 0px 0px 1px rgba(255,255,255,0.1); 
+    }
 </style>
 """, unsafe_allow_html=True)
 
@@ -53,7 +106,7 @@ LOCAL_DB = "sgs_local_db.sqlite"
 SCHOOL_CODE = "SK2025"
 STUDENT_STATUSES = ["Active", "Transferred", "Dropped Out", "Graduate", "Deleted"]
 
-# --- DATA MANAGER ---
+# --- DATA MANAGER (OPTIMIZED) ---
 
 @st.cache_data(ttl=30, show_spinner=False)
 def is_online():
@@ -128,12 +181,10 @@ def fetch_all_records(sheet_name):
             df = pd.read_sql(f"SELECT * FROM {sheet_name}", conn)
             conn.close()
             
-            # --- ID CLEANER ---
-            # Ensures IDs like "40001.0" become "40001"
             cols_to_str = ['student_id', 'password', 'username', 'teacher_username', 'ID']
             for col in cols_to_str:
                 if col in df.columns:
-                    df[col] = df[col].astype(str).str.replace(r'\.0$', '', regex=True).replace('nan', '')
+                    df[col] = df[col].astype(str).str.strip().str.replace(r'\.0$', '', regex=True).replace('nan', '')
             
             return df.fillna("").to_dict('records')
         except: return []
@@ -161,7 +212,7 @@ def perform_login_sync():
     if is_online():
         try:
             sh = get_cloud_connection()
-            if not sh: return
+            if not sh: return False
             conn = sqlite3.connect(LOCAL_DB)
             sheets = ["Users", "Subjects", "Students", "Grades", "Tasks", "Config"]
             for s in sheets:
@@ -650,12 +701,9 @@ def update_student_pic(student_id, image_bytes):
 def add_single_student(s_id, name, no, level, room, status="Active"):
     studs = fetch_all_records("Students")
     s_id = clean_id(s_id)
-    
-    # DUPLICATE CHECK: If ID exists, show info instead of error
     for s in studs:
         if clean_id(s['student_id']) == s_id:
             return False, f"⚠️ ID Found: {s['student_name']} ({s['grade_level']}/{s['room']} - {s['status']})"
-            
     studs.append({"student_id": s_id, "student_name": name, "class_no": no, "grade_level": level, "room": room, "photo": "", "password": "", "status": status})
     overwrite_sheet_data("Students", studs)
     clear_cache()
@@ -706,13 +754,11 @@ def promote_students(from_lvl, from_rm, to_lvl, to_rm):
 def upload_roster(df, level, room):
     studs = fetch_all_records("Students")
     existing_ids = [clean_id(s['student_id']) for s in studs]
-    
     current_max = 0
     for s in studs:
         if s['grade_level'] == level and str(s['room']) == str(room) and s.get('status') != 'Deleted':
              if int(s['class_no']) > current_max: current_max = int(s['class_no'])
     current_number = current_max + 1
-    
     added = 0
     errors = []
     for index, row in df.iterrows():
@@ -1060,7 +1106,8 @@ def page_roster():
             for idx, row in roster.iterrows():
                 c_x, c_y = st.columns([3, 1])
                 c_x.text(f"{row['class_no']}. {row['student_name']} ({row['status']})")
-                if c_y.button("🗑️ Bin", key=f"bin_{row['student_id']}"): delete_single_student(row['student_id']); st.rerun()
+                if c_y.button("🗑️ Bin", key=f"bin_{row['student_id']}_{idx}"): 
+                    delete_single_student(row['student_id']); st.rerun()
         else: st.info("Class is empty.")
     with t4:
         st.markdown("### 🚀 Batch Promote / Transfer")
@@ -1510,13 +1557,14 @@ def page_student_settings():
                 st.success("Photo updated! Please log out.")
     with c2:
         st.markdown("### 🔐 Change Password")
-        p1 = st.text_input("New Password", type="password")
-        p2 = st.text_input("Confirm New Password", type="password")
-        if st.form_submit_button("Update Password"):
-            if p1 == p2 and p1:
-                change_student_password(st.session_state.user[0], p1)
-                st.success("✅ Password updated! Please log out.")
-            else: st.error("⚠️ Passwords do not match.")
+        with st.form("student_pass_change"):
+            p1 = st.text_input("New Password", type="password")
+            p2 = st.text_input("Confirm New Password", type="password")
+            if st.form_submit_button("Update Password"):
+                if p1 == p2 and p1:
+                    change_student_password(st.session_state.user[0], p1)
+                    st.success("✅ Password updated! Please log out.")
+                else: st.error("⚠️ Passwords do not match.")
 
 # --- MAIN ---
 if 'logged_in' not in st.session_state:
