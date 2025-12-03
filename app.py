@@ -30,7 +30,7 @@ st.markdown("""
         font-family: 'Poppins', sans-serif;
     }
     
-    /* METRIC CARDS - Adaptive Theme */
+    /* METRIC CARDS */
     [data-testid="stMetric"] {
         background-color: var(--secondary-background-color);
         border: 1px solid rgba(128, 128, 128, 0.2);
@@ -40,14 +40,6 @@ st.markdown("""
         box-shadow: 0 4px 6px rgba(0,0,0,0.1);
     }
     
-    [data-testid="stMetric"] label {
-        color: var(--text-color) !important;
-    }
-    
-    [data-testid="stMetric"] [data-testid="stMetricValue"] {
-        color: var(--primary-color) !important;
-    }
-
     /* BUTTONS */
     .stButton > button {
         background: linear-gradient(90deg, #2b5876 0%, #4e4376 100%);
@@ -65,21 +57,18 @@ st.markdown("""
         color: #fff !important;
     }
 
-    /* TABLES - Text Size & Visibility */
-    div[data-testid="stDataEditor"] * { 
-        font-size: 1.15rem !important; 
-    }
-    div[data-testid="stDataFrame"] * { 
-        font-size: 1.15rem !important; 
+    /* TABLES */
+    div[data-testid="stDataEditor"] * { font-size: 1.15rem !important; }
+    div[data-testid="stDataFrame"] * { font-size: 1.15rem !important; }
+    
+    /* LOGIN HEADER */
+    h1 {
+        background: -webkit-linear-gradient(#2b5876, #4e4376);
+        -webkit-background-clip: text;
+        -webkit-text-fill-color: transparent;
+        text-shadow: 0px 0px 1px rgba(255,255,255,0.1); 
     }
     
-    /* RADIO BUTTONS & INPUTS */
-    .stRadio > label { 
-        font-size: 1.1rem !important; 
-        color: var(--text-color);
-    }
-    
-    /* SLOGAN TEXT */
     .slogan-style {
         font-size: 1.2rem;
         font-weight: 300;
@@ -88,14 +77,6 @@ st.markdown("""
         opacity: 0.8;
         margin-bottom: 10px;
         text-align: center;
-    }
-    
-    /* LOGIN HEADER */
-    h1 {
-        background: -webkit-linear-gradient(#2b5876, #4e4376);
-        -webkit-background-clip: text;
-        -webkit-text-fill-color: transparent;
-        text-shadow: 0px 0px 1px rgba(255,255,255,0.1); 
     }
 </style>
 """, unsafe_allow_html=True)
@@ -159,6 +140,7 @@ def init_db():
                 df = pd.DataFrame(columns=columns)
             df.to_sql(table_name, conn, index=False)
             
+    # Init Cloud Schema if connected
     if get_data_mode() == 'Cloud':
         try:
             sh = get_cloud_connection()
@@ -174,44 +156,27 @@ def init_db():
 
 @st.cache_data(ttl=60)
 def fetch_all_records(sheet_name):
-    mode = get_data_mode()
-    if mode == 'Local':
-        try:
-            conn = sqlite3.connect(LOCAL_DB)
-            df = pd.read_sql(f"SELECT * FROM {sheet_name}", conn)
-            conn.close()
-            cols_to_str = ['student_id', 'password', 'username', 'teacher_username', 'ID']
-            for col in cols_to_str:
-                if col in df.columns: df[col] = df[col].astype(str).replace('nan', '')
-            return df.fillna("").to_dict('records')
-        except: return []
-    elif mode == 'Cloud':
-        for attempt in range(3):
-            try:
-                sh = get_cloud_connection()
-                if not sh: return fetch_all_records_local_fallback(sheet_name)
-                return sh.worksheet(sheet_name).get_all_records()
-            except gspread.exceptions.WorksheetNotFound: 
-                init_db(); time.sleep(1); continue
-            except gspread.exceptions.APIError: time.sleep(1); continue
-            except Exception: return []
-    return []
-
-def fetch_all_records_local_fallback(sheet_name):
     try:
         conn = sqlite3.connect(LOCAL_DB)
         df = pd.read_sql(f"SELECT * FROM {sheet_name}", conn)
         conn.close()
+        cols_to_str = ['student_id', 'password', 'username', 'teacher_username', 'ID']
+        for col in cols_to_str:
+            if col in df.columns: df[col] = df[col].astype(str).replace('nan', '')
         return df.fillna("").to_dict('records')
-    except: return []
+    except:
+        init_db()
+        return []
 
 def perform_login_sync():
     if is_online():
         try:
             sh = get_cloud_connection()
-            if not sh: return
+            if not sh: return False # Cloud failed
+            
             conn = sqlite3.connect(LOCAL_DB)
             sheets = ["Users", "Subjects", "Students", "Grades", "Tasks", "Config"]
+            
             for s in sheets:
                 try:
                     data = sh.worksheet(s).get_all_records()
@@ -225,6 +190,7 @@ def perform_login_sync():
     return False
 
 def overwrite_sheet_data(sheet_name, data_list_of_dicts):
+    # 1. Write Local
     try:
         conn = sqlite3.connect(LOCAL_DB)
         df = pd.DataFrame(data_list_of_dicts)
@@ -233,6 +199,7 @@ def overwrite_sheet_data(sheet_name, data_list_of_dicts):
     except Exception as e:
         print(f"Local Save Error: {e}")
 
+    # 2. Write Cloud
     if get_data_mode() == 'Cloud':
         try:
             sh = get_cloud_connection()
@@ -244,10 +211,12 @@ def overwrite_sheet_data(sheet_name, data_list_of_dicts):
                     ws.clear()
                     ws.append_rows(rows)
                 else: ws.clear()
+            else:
+                st.warning("⚠️ Cloud Connection Error: Check 'Secrets'. Data saved LOCALLY only.")
         except:
-            st.warning("⚠️ Saved LOCALLY. Cloud update failed (Connection unstable).")
+            st.warning("⚠️ Internet unstable. Saved LOCALLY only.")
     else:
-        st.warning("⚠️ Saved LOCALLY only (Offline Mode).")
+        st.warning("⚠️ Offline Mode. Saved LOCALLY only.")
 
 def clear_cache():
     st.cache_data.clear()
@@ -474,7 +443,7 @@ def save_final_exam_batch(subject, quarter, year, grade_df, max_score, teacher):
                 processed_sids.append(sid)
     for sid, score in grade_updates.items():
         if sid not in processed_sids:
-            new_row = {"id": int(time.time()) + int(sid), "student_id": sid, "subject": subject, "quarter": quarter, "school_year": year, "test1": 0, "test2": 0, "test3": 0, "final_score": score, "total_score": score, "recorded_by": teacher, "timestamp": str(datetime.datetime.now())}
+            new_row = {"id": int(time.time()) + int(sid), "student_id": sid, "subject": subject, "quarter": quarter, "school_year": year, "test1": 0, "test2": 0, "test3": 0, "final_score": 0, "total_score": score, "recorded_by": teacher, "timestamp": str(datetime.datetime.now())}
             all_grades.append(new_row)
     overwrite_sheet_data("Grades", all_grades)
     clear_cache()
@@ -809,13 +778,19 @@ def login_screen():
                 if st.form_submit_button("Login"):
                     user = login_staff(u, p)
                     if user:
-                        with st.spinner("Syncing..."): perform_login_sync()
+                        with st.spinner("Syncing..."): 
+                            success = perform_login_sync()
+                            if not success and get_data_mode() == 'Cloud':
+                                st.error("⚠️ Cloud Sync Failed! Check connection or secrets.")
                         st.session_state.logged_in = True
                         st.session_state.user = user
                         st.session_state.role = user[2]
                         st.success(f"Welcome, {user[0]}!")
                         time.sleep(0.5); st.rerun()
-                    else: st.error("Invalid credentials")
+                    else: 
+                        st.error("Invalid credentials")
+                        if get_data_mode() == 'Local':
+                            st.warning("⚠️ System is in LOCAL MODE. New accounts may not be synced yet.")
             with st.expander("Register New Teacher"):
                 with st.form("reg_form"):
                     nu = st.text_input("New Username")
@@ -1148,7 +1123,6 @@ def page_input_grades():
         test_name = selected_tab
         weight = 10.0
         
-        # --- STATUS BAR LOGIC ---
         total_test_max = get_total_max_score_for_test(subj, q, yr, test_name)
         existing_tasks = fetch_task_records(subj, q, yr, test_name)
         pass_count = 0
@@ -1162,7 +1136,6 @@ def page_input_grades():
                 if raw_total >= (total_test_max / 2): pass_count += 1
                 else: fail_count += 1
         
-        # STATUS BAR DISPLAY
         st.markdown(f"### 📊 Class Performance: {test_name} ({int(weight)}pts)")
         m1, m2, m3, m4 = st.columns(4)
         m1.metric("Total Students", len(roster))
@@ -1173,14 +1146,12 @@ def page_input_grades():
 
         st.markdown(f"### {test_name} Input")
         
-        # --- DYNAMIC TASK SELECTOR ---
         active_count = get_enabled_tasks_count(subj, q, yr, test_name)
         
         col_sel, col_add = st.columns([4, 1])
         with col_add:
             if st.button("➕ Add Task"):
                 if active_count < 10:
-                    # Activate next task by setting dummy config
                     next_t = active_count + 1
                     save_task_max_score(subj, q, yr, test_name, f"Task {next_t}", 0)
                     st.rerun()
@@ -1192,49 +1163,34 @@ def page_input_grades():
         
         if task_choice == "All Tasks (Overview)":
             st.info("ℹ️ Overview Mode: View all enabled tasks and Weighted Score.")
-            # Calculate total max score
             total_test_max = get_total_max_score_for_test(subj, q, yr, test_name)
-            
-            # Fetch data
             existing_tasks = fetch_task_records(subj, q, yr, test_name)
             editor_data = []
             
             for index, row in roster.iterrows():
                 sid = str(row['student_id'])
                 t_rec = existing_tasks.get(sid, {})
-                
                 raw_sum = 0.0
-                row_data = {
-                    "No": row['class_no'], 
-                    "ID": sid, 
-                    "Name": row['student_name']
-                }
+                row_data = {"No": row['class_no'], "ID": sid, "Name": row['student_name']}
                 
-                # Add columns for active tasks
                 for i in range(1, active_count + 1):
                     val = float(t_rec.get(f't{i}', 0))
                     row_data[f"Task {i}"] = val
                     raw_sum += val
                 
                 row_data["Total Raw"] = raw_sum
-                
-                # Calc Weighted
                 w_score = 0.0
                 if total_test_max > 0:
                     w_score = (raw_sum / total_test_max) * weight
                     if w_score > weight: w_score = weight
                 row_data["Weighted Score"] = w_score
                 
-                # Status
                 status = "Pass"
                 if total_test_max > 0 and raw_sum < (total_test_max/2): status = "Fail"
                 row_data["Status"] = status
-                
                 editor_data.append(row_data)
             
             df_editor = pd.DataFrame(editor_data)
-            
-            # Dynamic Column Config
             col_config = {
                 "No": st.column_config.NumberColumn(disabled=True, width="small"),
                 "ID": st.column_config.TextColumn(disabled=True),
@@ -1252,21 +1208,17 @@ def page_input_grades():
                         if ok: st.success(msg); time.sleep(0.5); st.rerun()
 
         else:
-            # --- INDIVIDUAL TASK MODE ---
             current_max = get_task_max_score(subj, q, yr, test_name, task_choice)
             new_max = st.number_input(f"Maximum Score for {task_choice}", min_value=0.0, value=current_max, step=1.0)
             
-            # SAVE MAX SCORE IF CHANGED
             if new_max != current_max:
                 save_task_max_score(subj, q, yr, test_name, task_choice, new_max)
                 st.rerun()
 
-            # DISABLE/HIDE IF MAX SCORE IS 0
             if new_max <= 0:
                 st.warning(f"⚠️ Please set the **Maximum Score** for {task_choice} above 0 to enable grading.")
             else:
                 editor_data = []
-                # Map Task Choice to DB key (Task 1 -> t1)
                 t_num = int(task_choice.split(" ")[1])
                 task_key = f"t{t_num}"
                 
@@ -1276,19 +1228,12 @@ def page_input_grades():
                     current_score = float(t_rec.get(task_key, 0))
                     raw_total = float(t_rec.get('raw_total', 0)) 
                     
-                    # Calc Weighted
                     w_score = 0.0
                     if total_test_max > 0:
                         w_score = (raw_total / total_test_max) * weight
                         if w_score > weight: w_score = weight
                     
-                    row_data = {
-                        "No": row['class_no'], 
-                        "ID": sid, 
-                        "Name": row['student_name'],
-                        task_choice: current_score,
-                        "Weighted Score": w_score
-                    }
+                    row_data = {"No": row['class_no'], "ID": sid, "Name": row['student_name'], task_choice: current_score, "Weighted Score": w_score}
                     editor_data.append(row_data)
                 
                 df_editor = pd.DataFrame(editor_data)
@@ -1351,7 +1296,6 @@ def page_input_grades():
         target_test = st.selectbox("Select Target", ["Test 1", "Test 2", "Test 3", "Final Exam"])
         weight = 20.0 if target_test == "Final Exam" else 10.0
         
-        # User defines max score for the whole upload
         upload_max_score = st.number_input(f"Total Max Raw Score for {target_test} (Sum of all tasks)", min_value=1.0, value=50.0)
         
         st.info("ℹ️ Upload overwrites existing scores for this test. Columns Task 1...Task 10 are supported.")
@@ -1371,7 +1315,6 @@ def page_input_grades():
             if st.button("Process Upload"):
                 try:
                     df = pd.read_excel(up_file)
-                    # Normalize columns if needed
                     if "Student ID" in df.columns: df = df.rename(columns={"Student ID": "ID"})
                     
                     ok, msg = save_batch_tasks_and_grades(subj, q, yr, target_test, df, upload_max_score, weight, st.session_state.user[0])
