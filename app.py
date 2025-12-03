@@ -23,27 +23,80 @@ st.set_page_config(
 # --- CSS STYLING ---
 st.markdown("""
 <style>
-    .main { padding-top: 2rem; }
-    h1, h2, h3 { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; font-weight: 600; letter-spacing: -0.5px; }
+    /* GLOBAL FONTS */
+    @import url('https://fonts.googleapis.com/css2?family=Poppins:wght@300;400;600&display=swap');
     
-    /* STATUS BAR & METRICS */
+    html, body, [class*="css"]  {
+        font-family: 'Poppins', sans-serif;
+    }
+    
+    /* METRIC CARDS - Adaptive Theme */
     [data-testid="stMetric"] {
         background-color: var(--secondary-background-color);
         border: 1px solid rgba(128, 128, 128, 0.2);
         padding: 15px;
         border-radius: 10px;
         text-align: center;
-        box-shadow: 0 2px 5px rgba(0,0,0,0.05);
+        box-shadow: 0 4px 6px rgba(0,0,0,0.1);
     }
     
-    .stButton > button { background: linear-gradient(135deg, #2b5876 0%, #4e4376 100%); color: white !important; border: none; border-radius: 8px; font-weight: 600; letter-spacing: 0.5px; padding: 0.6rem 1.2rem; transition: all 0.3s ease; box-shadow: 0 2px 5px rgba(0,0,0,0.1); }
-    .stButton > button:hover { transform: translateY(-2px); box-shadow: 0 5px 15px rgba(0,0,0,0.2); opacity: 0.95; }
+    [data-testid="stMetric"] label {
+        color: var(--text-color) !important;
+    }
     
-    /* INPUTS & TABLES */
-    div[data-testid="stDataEditor"] * { font-size: 1.2rem !important; }
-    div[data-testid="stDataFrame"] * { font-size: 1.2rem !important; }
-    label { font-size: 1.1rem !important; }
-    .stRadio > label { font-size: 1.1rem !important; }
+    [data-testid="stMetric"] [data-testid="stMetricValue"] {
+        color: var(--primary-color) !important;
+    }
+
+    /* BUTTONS */
+    .stButton > button {
+        background: linear-gradient(90deg, #2b5876 0%, #4e4376 100%);
+        color: white !important;
+        border: none;
+        border-radius: 10px;
+        font-weight: 600;
+        padding: 0.6rem 1.5rem;
+        transition: all 0.3s ease;
+        box-shadow: 0 4px 6px rgba(0,0,0,0.2);
+    }
+    .stButton > button:hover {
+        transform: scale(1.02);
+        box-shadow: 0 6px 12px rgba(0,0,0,0.3);
+        color: #fff !important;
+    }
+
+    /* TABLES - Text Size & Visibility */
+    div[data-testid="stDataEditor"] * { 
+        font-size: 1.15rem !important; 
+    }
+    div[data-testid="stDataFrame"] * { 
+        font-size: 1.15rem !important; 
+    }
+    
+    /* RADIO BUTTONS & INPUTS */
+    .stRadio > label { 
+        font-size: 1.1rem !important; 
+        color: var(--text-color);
+    }
+    
+    /* SLOGAN TEXT */
+    .slogan-style {
+        font-size: 1.2rem;
+        font-weight: 300;
+        font-style: italic;
+        color: var(--text-color);
+        opacity: 0.8;
+        margin-bottom: 10px;
+        text-align: center;
+    }
+    
+    /* LOGIN HEADER */
+    h1 {
+        background: -webkit-linear-gradient(#2b5876, #4e4376);
+        -webkit-background-clip: text;
+        -webkit-text-fill-color: transparent;
+        text-shadow: 0px 0px 1px rgba(255,255,255,0.1); 
+    }
 </style>
 """, unsafe_allow_html=True)
 
@@ -53,7 +106,7 @@ LOCAL_DB = "sgs_local_db.sqlite"
 SCHOOL_CODE = "SK2025"
 STUDENT_STATUSES = ["Active", "Transferred", "Dropped Out", "Graduate", "Deleted"]
 
-# --- DATA MANAGER ---
+# --- DATA MANAGER (OPTIMIZED) ---
 
 @st.cache_data(ttl=30, show_spinner=False)
 def is_online():
@@ -841,27 +894,27 @@ def page_dashboard():
     st.title("📊 Dashboard")
     user = st.session_state.user[0]
     
-    # 1. Fetch Data
+    # --- 1. FETCH DATA ---
     subs = get_teacher_subjects_full(user)
     all_users = fetch_all_records("Users")
     teacher_count = sum(1 for u in all_users if u.get('role') == 'Teacher')
+    all_active_students = get_all_active_students_list()
+    total_system_students = len(all_active_students)
     
-    total_active_students = 0
     subject_details = []
-    
-    # 2. Calc Active Students per Subject
+    my_total_students = 0
     for s_id, s_name in subs:
         cnt = get_subject_student_count(s_name)
-        total_active_students += cnt
+        my_total_students += cnt
         subject_details.append((s_id, s_name, cnt))
         
-    # 3. Metrics Row
+    # --- 2. METRICS ROW ---
     c1, c2, c3 = st.columns(3)
-    c1.metric("My Subjects", len(subs))
-    c2.metric("Total Active Students", total_active_students)
-    c3.metric("Total Teachers", teacher_count)
+    c1.metric("My Subjects", len(subs), help=f"You teach {my_total_students} students total")
+    c2.metric("Total Active Students", total_system_students, delta="School Wide", delta_color="off")
+    c3.metric("Total Teachers", teacher_count, delta="School Wide", delta_color="off")
     
-    # 4. Subject Cards
+    # --- 3. SUBJECT CARDS ---
     st.markdown("### 📚 My Subjects")
     st.markdown("---")
     
@@ -887,7 +940,7 @@ def page_dashboard():
                 time.sleep(1)
                 st.rerun()
 
-    # Add New Subject Section
+    # --- 4. ADD NEW SUBJECT FORM ---
     st.markdown("### ➕ Add New Subject")
     with st.form("add_sub"):
         c_add1, c_add2 = st.columns([3, 1])
@@ -981,83 +1034,7 @@ def page_admin_manage_students():
                 sid_only = res_id.split(" - ")[0]
                 admin_restore_student(sid_only); st.success(f"Student {sid_only} restored!"); time.sleep(1.5); st.rerun()
         else: st.info("Bin is empty.")
-        
-def page_dashboard():
-    st.title("📊 Dashboard")
-    user = st.session_state.user[0]
-    
-    # --- 1. FETCH DATA ---
-    # Get Teacher's Subjects
-    subs = get_teacher_subjects_full(user)
-    
-    # Get System-Wide Teacher Count
-    all_users = fetch_all_records("Users")
-    teacher_count = sum(1 for u in all_users if u.get('role') == 'Teacher')
-    
-    # Get System-Wide Student Count (NEW FIX)
-    all_active_students = get_all_active_students_list()
-    total_system_students = len(all_active_students)
-    
-    # Calculate "My Students" for the subject breakdown
-    subject_details = []
-    my_total_students = 0
-    for s_id, s_name in subs:
-        cnt = get_subject_student_count(s_name)
-        my_total_students += cnt
-        subject_details.append((s_id, s_name, cnt))
-        
-    # --- 2. METRICS ROW ---
-    c1, c2, c3 = st.columns(3)
-    
-    # Metric 1: My Subjects
-    c1.metric("My Subjects", len(subs), help=f"You teach {my_total_students} students total")
-    
-    # Metric 2: System-Wide Active Students (FIXED)
-    c2.metric("Total Active Students", total_system_students, delta="School Wide", delta_color="off")
-    
-    # Metric 3: System-Wide Teachers
-    c3.metric("Total Teachers", teacher_count, delta="School Wide", delta_color="off")
-    
-    # --- 3. SUBJECT CARDS ---
-    st.markdown("### 📚 My Subjects")
-    st.markdown("---")
-    
-    if not subject_details:
-        st.info("You haven't added any subjects yet.")
-    
-    for s_id, s_name, cnt in subject_details:
-        label = f"📘 {s_name} ({cnt} Students)"
-        with st.expander(label):
-            st.caption(f"Manage settings for {s_name}")
-            c_a, c_b = st.columns([3, 1])
-            new_name = c_a.text_input("Rename Subject", value=s_name, key=f"ren_{s_id}")
-            if c_b.button("Update", key=f"btn_ren_{s_id}"):
-                update_subject(s_id, new_name)
-                st.success("Renamed!")
-                time.sleep(1)
-                st.rerun()
-            
-            st.markdown("---")
-            if st.button("🗑️ Delete Subject", key=f"btn_del_{s_id}", help="This will remove the subject from your list."):
-                delete_subject(s_id)
-                st.warning("Deleted!")
-                time.sleep(1)
-                st.rerun()
 
-    # --- 4. ADD NEW SUBJECT FORM ---
-    st.markdown("### ➕ Add New Subject")
-    with st.form("add_sub"):
-        c_add1, c_add2 = st.columns([3, 1])
-        new_s = c_add1.text_input("Subject Name", placeholder="e.g. Mathematics M1")
-        if c_add2.form_submit_button("Add Subject"):
-            if new_s:
-                ok, msg = add_subject(user, new_s)
-                if ok: 
-                    st.success(msg)
-                    time.sleep(1)
-                    st.rerun()
-                else: 
-                    st.error(msg)
 def page_roster():
     st.title("📂 Student Roster Management")
     c1, c2 = st.columns(2)
@@ -1426,6 +1403,34 @@ def page_gradebook():
         else:
              data.append({"No": row['class_no'], "Name": row['student_name'], "Test 1": "-", "Test 2": "-", "Test 3": "-", "Final": "-", "Total": "-", "GPA": "-"})
     st.dataframe(pd.DataFrame(data), hide_index=True, width=1200)
+    
+    # --- DOWNLOAD BUTTON ---
+    if data:
+        # Create a new DataFrame for export with specific columns
+        export_data = []
+        for row in data:
+            export_data.append({
+                "No.": row["No"],
+                "Name": row["Name"],
+                "Test 1(10)": row["Test 1"],
+                "Test 2(10)": row["Test 2"],
+                "Test 3(10)": row["Test 3"],
+                "Final(20)": row["Final"]
+            })
+        
+        df_export = pd.DataFrame(export_data)
+        
+        # Create Excel
+        buffer = io.BytesIO()
+        with pd.ExcelWriter(buffer, engine='xlsxwriter') as writer:
+            df_export.to_excel(writer, index=False, sheet_name="Gradebook")
+            
+        st.download_button(
+            label="⬇️ Download Gradebook (Excel)",
+            data=buffer.getvalue(),
+            file_name=f"Gradebook_{s}_{l}_{r}_{q}.xlsx",
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+        )
 
 def page_student_record_teacher_view():
     st.title("👤 Student Individual Record")
@@ -1454,13 +1459,11 @@ def page_student_record_teacher_view():
                 if photo: st.image(Image.open(io.BytesIO(photo)), width=150)
                 else: st.image("https://cdn-icons-png.flaticon.com/512/3135/3135715.png", width=150)
                 st.markdown(f"**{name}**\nID: {s_search} | {lvl}/{rm}\nStatus: {stat}")
-                
                 with st.expander("📷 Update Photo"):
                     up = st.file_uploader("Upload New Photo", type=['jpg','png'], key=f"u_stu_{s_search}")
                     if up and st.button("Save Photo", key=f"b_stu_{s_search}"):
                         update_student_pic(s_search, up.getvalue())
                         st.success("Photo Updated!"); time.sleep(1); st.rerun()
-
             with c_table:
                 st.markdown("### 📜 Academic History")
                 report = get_student_full_report(s_search)
@@ -1474,9 +1477,7 @@ def page_teacher_settings():
     st.title("⚙️ Account Settings")
     current_u = st.session_state.user[0]
     current_p = st.session_state.user[1]
-    
     c_set1, c_set2 = st.columns(2)
-    
     with c_set1:
         with st.form("teach_settings"):
             st.markdown("### 🔐 Credentials")
@@ -1489,7 +1490,6 @@ def page_teacher_settings():
                         if ok: st.success(msg); st.session_state.logged_in = False; time.sleep(2); st.rerun()
                         else: st.error(msg)
                 else: st.warning("Fields cannot be empty.")
-    
     with c_set2:
         st.markdown("### 📷 Profile Picture")
         up_t = st.file_uploader("Upload New Photo", type=['jpg','png'], key="sett_t_up")
