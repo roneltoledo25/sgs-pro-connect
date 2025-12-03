@@ -20,7 +20,7 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
-# --- CSS STYLING ---
+# --- CSS STYLING (HIGH CONTRAST & COLORFUL TABLES) ---
 st.markdown("""
 <style>
     /* GLOBAL FONTS */
@@ -30,7 +30,7 @@ st.markdown("""
         font-family: 'Poppins', sans-serif;
     }
     
-    /* METRIC CARDS - Adaptive Theme */
+    /* METRIC CARDS - High Contrast */
     [data-testid="stMetric"] {
         background-color: var(--secondary-background-color);
         border: 1px solid rgba(128, 128, 128, 0.2);
@@ -40,20 +40,22 @@ st.markdown("""
         box-shadow: 0 4px 6px rgba(0,0,0,0.1);
     }
     
+    /* Force Text Colors for Visibility */
     [data-testid="stMetric"] label {
         color: var(--text-color) !important;
+        font-weight: 600;
     }
     
     [data-testid="stMetric"] [data-testid="stMetricValue"] {
-        color: var(--primary-color) !important;
+        color: #2E86C1 !important; /* Strong Blue */
     }
 
-    /* BUTTONS */
+    /* BUTTONS - Gradient Blue/Purple */
     .stButton > button {
         background: linear-gradient(90deg, #2b5876 0%, #4e4376 100%);
         color: white !important;
         border: none;
-        border-radius: 10px;
+        border-radius: 8px;
         font-weight: 600;
         padding: 0.6rem 1.5rem;
         transition: all 0.3s ease;
@@ -65,21 +67,31 @@ st.markdown("""
         color: #fff !important;
     }
 
-    /* TABLES - Text Size & Visibility */
-    div[data-testid="stDataEditor"] * { 
-        font-size: 1.15rem !important; 
+    /* --- TABLE STYLING (The "Colorful" Part) --- */
+    /* Header Background */
+    thead tr th:first-child { display:none }
+    tbody th { display:none }
+    
+    /* Alternating Row Colors (Zebra Striping) for readability */
+    [data-testid="stDataFrame"] {
+        border: 1px solid #e0e0e0;
+        border-radius: 10px;
     }
+    
+    /* Fix for Table Text Visibility in Dark Mode */
     div[data-testid="stDataFrame"] * { 
-        font-size: 1.15rem !important; 
+        font-size: 1.15rem !important;
+        color: var(--text-color) !important; 
+    }
+
+    /* LOGIN HEADER */
+    h1 {
+        background: -webkit-linear-gradient(#2b5876, #4e4376);
+        -webkit-background-clip: text;
+        -webkit-text-fill-color: transparent;
+        text-shadow: 0px 0px 1px rgba(255,255,255,0.1); 
     }
     
-    /* RADIO BUTTONS & INPUTS */
-    .stRadio > label { 
-        font-size: 1.1rem !important; 
-        color: var(--text-color);
-    }
-    
-    /* SLOGAN TEXT */
     .slogan-style {
         font-size: 1.2rem;
         font-weight: 300;
@@ -88,14 +100,6 @@ st.markdown("""
         opacity: 0.8;
         margin-bottom: 10px;
         text-align: center;
-    }
-    
-    /* LOGIN HEADER */
-    h1 {
-        background: -webkit-linear-gradient(#2b5876, #4e4376);
-        -webkit-background-clip: text;
-        -webkit-text-fill-color: transparent;
-        text-shadow: 0px 0px 1px rgba(255,255,255,0.1); 
     }
 </style>
 """, unsafe_allow_html=True)
@@ -180,12 +184,10 @@ def fetch_all_records(sheet_name):
             conn = sqlite3.connect(LOCAL_DB)
             df = pd.read_sql(f"SELECT * FROM {sheet_name}", conn)
             conn.close()
-            
             cols_to_str = ['student_id', 'password', 'username', 'teacher_username', 'ID']
             for col in cols_to_str:
                 if col in df.columns:
                     df[col] = df[col].astype(str).str.strip().str.replace(r'\.0$', '', regex=True).replace('nan', '')
-            
             return df.fillna("").to_dict('records')
         except: return []
     elif mode == 'Cloud':
@@ -763,9 +765,7 @@ def upload_roster(df, level, room):
     errors = []
     for index, row in df.iterrows():
         s_id = clean_id(row['ID'])
-        if s_id in existing_ids: 
-            errors.append(f"Skipped {s_id} (Duplicate)")
-            continue
+        if s_id in existing_ids: errors.append(f"Skipped {s_id}"); continue
         studs.append({"student_id": s_id, "student_name": str(row['Name']), "class_no": current_number, "grade_level": level, "room": room, "photo": "", "password": "", "status": "Active"})
         existing_ids.append(s_id)
         current_number += 1
@@ -819,19 +819,13 @@ def login_screen():
                 if st.form_submit_button("Login"):
                     user = login_staff(u, p)
                     if user:
-                        with st.spinner("Syncing..."): 
-                            success = perform_login_sync()
-                            if not success and get_data_mode() == 'Cloud':
-                                st.error("⚠️ Cloud Sync Failed! Check connection or secrets.")
+                        with st.spinner("Syncing..."): perform_login_sync()
                         st.session_state.logged_in = True
                         st.session_state.user = user
                         st.session_state.role = user[2]
                         st.success(f"Welcome, {user[0]}!")
                         time.sleep(0.5); st.rerun()
-                    else: 
-                        st.error("Invalid credentials")
-                        if get_data_mode() == 'Local':
-                            st.warning("⚠️ System is in LOCAL MODE. New accounts may not be synced yet.")
+                    else: st.error("Invalid credentials")
             with st.expander("Register New Teacher"):
                 with st.form("reg_form"):
                     nu = st.text_input("New Username")
@@ -911,12 +905,18 @@ def page_dashboard():
     user = st.session_state.user[0]
     
     # --- 1. FETCH DATA ---
+    # Get Teacher's Subjects
     subs = get_teacher_subjects_full(user)
+    
+    # Get System-Wide Teacher Count
     all_users = fetch_all_records("Users")
     teacher_count = sum(1 for u in all_users if u.get('role') == 'Teacher')
+    
+    # Get System-Wide Student Count (NEW FIX)
     all_active_students = get_all_active_students_list()
     total_system_students = len(all_active_students)
     
+    # Calculate "My Students" for the subject breakdown
     subject_details = []
     my_total_students = 0
     for s_id, s_name in subs:
@@ -926,8 +926,14 @@ def page_dashboard():
         
     # --- 2. METRICS ROW ---
     c1, c2, c3 = st.columns(3)
+    
+    # Metric 1: My Subjects
     c1.metric("My Subjects", len(subs), help=f"You teach {my_total_students} students total")
+    
+    # Metric 2: System-Wide Active Students (FIXED)
     c2.metric("Total Active Students", total_system_students, delta="School Wide", delta_color="off")
+    
+    # Metric 3: System-Wide Teachers
     c3.metric("Total Teachers", teacher_count, delta="School Wide", delta_color="off")
     
     # --- 3. SUBJECT CARDS ---
@@ -1194,11 +1200,12 @@ def page_input_grades():
         
         # STATUS BAR DISPLAY
         st.markdown(f"### 📊 Class Performance: {test_name} ({int(weight)}pts)")
-        m1, m2, m3, m4 = st.columns(4)
-        m1.metric("Total Students", len(roster))
-        m2.metric("Passing", pass_count, delta="Good", delta_color="normal")
-        m3.metric("Failing", fail_count, delta="-Needs Imprv", delta_color="inverse")
-        m4.metric("Test Max Score", int(total_test_max))
+        with st.expander("Show/Hide Performance Stats", expanded=True):
+            m1, m2, m3, m4 = st.columns(4)
+            m1.metric("Total Students", len(roster))
+            m2.metric("Passing", pass_count, delta="Good", delta_color="normal")
+            m3.metric("Failing", fail_count, delta="-Needs Imprv", delta_color="inverse")
+            m4.metric("Test Max Score", int(total_test_max))
         st.markdown("---")
 
         st.markdown(f"### {test_name} Input")
@@ -1356,11 +1363,12 @@ def page_input_grades():
             final_data.append({"No": row['class_no'], "ID": sid, "Name": row['student_name'], "Raw Score": raw_val, "Weighted (20%)": w_val})
         
         st.markdown(f"### 📊 Class Performance: Final Exam (20pts)")
-        m1, m2, m3, m4 = st.columns(4)
-        m1.metric("Total Students", len(roster))
-        m2.metric("Passing", pass_count, delta="Good", delta_color="normal")
-        m3.metric("Failing", fail_count, delta="-Needs Imprv", delta_color="inverse")
-        m4.metric("Exam Max", int(max_final))
+        with st.expander("Show/Hide Performance Stats", expanded=True):
+            m1, m2, m3, m4 = st.columns(4)
+            m1.metric("Total Students", len(roster))
+            m2.metric("Passing", pass_count, delta="Good", delta_color="normal")
+            m3.metric("Failing", fail_count, delta="-Needs Imprv", delta_color="inverse")
+            m4.metric("Exam Max", int(max_final))
         st.markdown("---")
 
         df_final = pd.DataFrame(final_data)
