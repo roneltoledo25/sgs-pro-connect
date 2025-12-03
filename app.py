@@ -8,101 +8,120 @@ import json
 import os
 import socket
 import sqlite3
+import altair as alt
 from oauth2client.service_account import ServiceAccountCredentials
 from PIL import Image
 import base64
 
 # --- PAGE CONFIGURATION ---
 st.set_page_config(
-    page_title="SGS Pro Connect | Admin",
+    page_title="SGS Pro Connect",
     page_icon="🎓",
     layout="wide",
     initial_sidebar_state="expanded"
 )
 
-# --- CSS STYLING (HIGH CONTRAST & COLORFUL TABLES) ---
-st.markdown("""
-<style>
-    /* GLOBAL FONTS */
-    @import url('https://fonts.googleapis.com/css2?family=Poppins:wght@300;400;600&display=swap');
-    
-    html, body, [class*="css"]  {
-        font-family: 'Poppins', sans-serif;
-    }
-    
-    /* METRIC CARDS - High Contrast */
-    [data-testid="stMetric"] {
-        background-color: var(--secondary-background-color);
-        border: 1px solid rgba(128, 128, 128, 0.2);
-        padding: 15px;
-        border-radius: 10px;
-        text-align: center;
-        box-shadow: 0 4px 6px rgba(0,0,0,0.1);
-    }
-    
-    /* Force Text Colors for Visibility */
-    [data-testid="stMetric"] label {
-        color: var(--text-color) !important;
-        font-weight: 600;
-    }
-    
-    [data-testid="stMetric"] [data-testid="stMetricValue"] {
-        color: #2E86C1 !important; /* Strong Blue */
-    }
+# --- MODERN UI & CSS STYLING ---
+def load_custom_css():
+    st.markdown("""
+    <style>
+        /* IMPORT FONT */
+        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;600;700&display=swap');
+        
+        html, body, [class*="css"]  {
+            font-family: 'Inter', sans-serif;
+        }
 
-    /* BUTTONS - Gradient Blue/Purple */
-    .stButton > button {
-        background: linear-gradient(90deg, #2b5876 0%, #4e4376 100%);
-        color: white !important;
-        border: none;
-        border-radius: 8px;
-        font-weight: 600;
-        padding: 0.6rem 1.5rem;
-        transition: all 0.3s ease;
-        box-shadow: 0 4px 6px rgba(0,0,0,0.2);
-    }
-    .stButton > button:hover {
-        transform: scale(1.02);
-        box-shadow: 0 6px 12px rgba(0,0,0,0.3);
-        color: #fff !important;
-    }
+        /* PRIMARY GRADIENT BACKGROUND FOR HEADERS */
+        .stAppHeader {
+            background-color: transparent;
+        }
 
-    /* --- TABLE STYLING (The "Colorful" Part) --- */
-    /* Header Background */
-    thead tr th:first-child { display:none }
-    tbody th { display:none }
-    
-    /* Alternating Row Colors (Zebra Striping) for readability */
-    [data-testid="stDataFrame"] {
-        border: 1px solid #e0e0e0;
-        border-radius: 10px;
-    }
-    
-    /* Fix for Table Text Visibility in Dark Mode */
-    div[data-testid="stDataFrame"] * { 
-        font-size: 1.15rem !important;
-        color: var(--text-color) !important; 
-    }
+        /* METRIC CARDS - Modern Card Style */
+        div[data-testid="stMetric"] {
+            background-color: #ffffff;
+            border: 1px solid #e0e0e0;
+            padding: 20px;
+            border-radius: 12px;
+            box-shadow: 0 4px 12px rgba(0,0,0,0.05);
+            transition: transform 0.2s;
+        }
+        div[data-testid="stMetric"]:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 6px 15px rgba(0,0,0,0.1);
+        }
+        
+        [data-testid="stMetricLabel"] {
+            color: #555;
+            font-size: 0.9rem;
+            font-weight: 600;
+        }
+        
+        [data-testid="stMetricValue"] {
+            color: #2b5876;
+            font-weight: 700;
+        }
 
-    /* LOGIN HEADER */
-    h1 {
-        background: -webkit-linear-gradient(#2b5876, #4e4376);
-        -webkit-background-clip: text;
-        -webkit-text-fill-color: transparent;
-        text-shadow: 0px 0px 1px rgba(255,255,255,0.1); 
-    }
-    
-    .slogan-style {
-        font-size: 1.2rem;
-        font-weight: 300;
-        font-style: italic;
-        color: var(--text-color);
-        opacity: 0.8;
-        margin-bottom: 10px;
-        text-align: center;
-    }
-</style>
-""", unsafe_allow_html=True)
+        /* CUSTOM BUTTONS */
+        .stButton > button {
+            background: linear-gradient(135deg, #2b5876 0%, #4e4376 100%);
+            color: white !important;
+            border: none;
+            border-radius: 8px;
+            padding: 0.5rem 1.2rem;
+            font-weight: 600;
+            box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+            transition: all 0.3s ease;
+        }
+        .stButton > button:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 6px 12px rgba(0,0,0,0.2);
+            opacity: 0.95;
+        }
+
+        /* LOGIN SCREEN HEADER */
+        .login-header {
+            background: -webkit-linear-gradient(#2b5876, #4e4376);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            font-weight: 800;
+            font-size: 2.5rem;
+            margin-bottom: 0px;
+        }
+        .slogan-style {
+            font-size: 1.1rem;
+            color: #666;
+            font-style: italic;
+            margin-bottom: 2rem;
+        }
+
+        /* TAB STYLING */
+        .stTabs [data-baseweb="tab-list"] {
+            gap: 20px;
+        }
+        .stTabs [data-baseweb="tab"] {
+            height: 50px;
+            border-radius: 8px;
+            padding: 0px 20px;
+            background-color: #f0f2f6;
+            border: none;
+            font-weight: 600;
+        }
+        .stTabs [aria-selected="true"] {
+            background-color: #e3f2fd;
+            color: #1976d2;
+        }
+
+        /* DATAFRAME & EDITOR POLISH */
+        [data-testid="stDataFrame"] {
+            border: 1px solid #eee;
+            border-radius: 10px;
+            overflow: hidden;
+        }
+    </style>
+    """, unsafe_allow_html=True)
+
+load_custom_css()
 
 # --- CONSTANTS ---
 SHEET_NAME = "SGS_Database" 
@@ -110,7 +129,7 @@ LOCAL_DB = "sgs_local_db.sqlite"
 SCHOOL_CODE = "SK2025"
 STUDENT_STATUSES = ["Active", "Transferred", "Dropped Out", "Graduate", "Deleted"]
 
-# --- DATA MANAGER (OPTIMIZED) ---
+# --- DATA MANAGER ---
 
 @st.cache_data(ttl=30, show_spinner=False)
 def is_online():
@@ -146,7 +165,8 @@ def init_db():
         "Subjects": ["id", "teacher_username", "subject_name"],
         "Students": ["student_id", "student_name", "class_no", "grade_level", "room", "photo", "password", "status"],
         "Grades": ["id", "student_id", "subject", "quarter", "school_year", "test1", "test2", "test3", "final_score", "total_score", "recorded_by", "timestamp"],
-        "Config": ["uid", "subject", "quarter", "year", "test_name", "task_name", "max_score"]
+        "Config": ["uid", "subject", "quarter", "year", "test_name", "task_name", "max_score"],
+        "Attendance": ["uid", "student_id", "student_name", "subject", "date", "status", "recorded_by", "timestamp"]
     }
     task_cols = ["uid", "student_id", "subject", "quarter", "school_year", "test_name"]
     for i in range(1, 11): task_cols.append(f"t{i}") 
@@ -250,21 +270,55 @@ def overwrite_sheet_data(sheet_name, data_list_of_dicts):
                     ws.append_rows(rows)
                 else: ws.clear()
         except:
-            st.warning("⚠️ Saved LOCALLY. Cloud update failed (Connection unstable).")
+            st.toast("⚠️ Saved LOCALLY. Cloud update failed (Connection unstable).", icon="📂")
     else:
-        st.warning("⚠️ Saved LOCALLY only (Offline Mode).")
+        st.toast("⚠️ Saved LOCALLY only (Offline Mode).", icon="📂")
 
 def clear_cache():
     st.cache_data.clear()
 
 # --- HELPER FUNCTIONS ---
 def get_school_years():
-    current_year = datetime.datetime.now().year
-    return [f"{current_year}-{current_year+1}", f"{current_year+1}-{current_year+2}", f"{current_year+2}-{current_year+3}"]
+    """
+    Calculates the school years based on a May-to-April cycle.
+    Returns: A list of 3 school years: [Previous, Current, Next]
+    """
+    now = datetime.datetime.now()
+    current_year = now.year
+    current_month = now.month
+    
+    # Determine the start year of the CURRENT school year (May-April cycle)
+    # School year runs from May of 'start_year' to April of 'start_year + 1'
+    if current_month >= 5: # May (5) to December (12)
+        start_year = current_year
+    else: # January (1) to April (4)
+        start_year = current_year - 1
+        
+    current_sy = f"{start_year}-{start_year + 1}"
+    prev_sy = f"{start_year - 1}-{start_year}"
+    next_sy = f"{start_year + 1}-{start_year + 2}"
+    
+    # Return previous, current, next
+    return [prev_sy, current_sy, next_sy]
 
 def fmt_score(val):
     if val % 1 == 0: return f"{int(val)}"
     return f"{val:.1f}"
+
+def get_sem_gpa(score):
+    """
+    Custom Grading Scale:
+    80-100 = 4.0 | 75-79 = 3.5 | 70-74 = 3.0 | 65-69 = 2.5
+    60-64  = 2.0 | 55-59 = 1.5 | 50-54 = 1.0 | 0-49  = 0.0
+    """
+    if score >= 80: return 4.0
+    elif score >= 75: return 3.5
+    elif score >= 70: return 3.0
+    elif score >= 65: return 2.5
+    elif score >= 60: return 2.0
+    elif score >= 55: return 1.5
+    elif score >= 50: return 1.0
+    else: return 0.0
 
 def get_grade_point(score):
     if score >= 80: return 4.0
@@ -280,10 +334,10 @@ def image_to_base64(img_bytes):
     if not img_bytes: return ""
     try:
         img = Image.open(io.BytesIO(img_bytes))
-        img.thumbnail((150, 150))
+        img.thumbnail((200, 200)) # Slightly larger for better quality
         if img.mode in ("RGBA", "P"): img = img.convert("RGB")
         buffer = io.BytesIO()
-        img.save(buffer, format="JPEG", quality=60)
+        img.save(buffer, format="JPEG", quality=80)
         return base64.b64encode(buffer.getvalue()).decode('utf-8')
     except: return ""
 
@@ -293,7 +347,6 @@ def base64_to_image(b64_str):
     except: return None
 
 def clean_id(val):
-    """Removes .0 from IDs"""
     return str(val).strip().replace('.0', '')
 
 # --- CONFIG & TASKS ---
@@ -638,11 +691,6 @@ def get_grade_record(student_id, subject, quarter, year):
             return (r['test1'], r['test2'], r['test3'], r['final_score'], r['total_score'])
     return None
 
-def get_student_grades_for_teacher_view(student_id, teacher_username):
-    records = fetch_all_records("Grades")
-    data = [r for r in records if clean_id(r['student_id']) == clean_id(student_id) and r['recorded_by'] == teacher_username]
-    return pd.DataFrame(data)
-
 def get_student_full_report(student_id):
     records = fetch_all_records("Grades")
     data = [r for r in records if clean_id(r['student_id']) == clean_id(student_id)]
@@ -799,33 +847,47 @@ def update_subject(sub_id, new_name):
 
 # --- UI COMPONENTS ---
 def login_screen():
-    c1, c2 = st.columns([1, 1], gap="large")
+    c1, c2 = st.columns([1, 1.2], gap="large")
     with c1:
-        st.markdown("## SGS Pro Connect")
-        st.image("logo/images.jpeg", width=300)
+        st.markdown("<div style='height: 40px;'></div>", unsafe_allow_html=True)
+        # Use a placeholder if logo doesn't exist to prevent error
+        try:
+            st.image("logo/images.jpeg", width=300)
+        except:
+            st.warning("Logo not found at logo/images.jpeg")
+            
+        st.markdown("### Welcome to SGS Pro Connect")
+        st.markdown("Streamline your school management with our secure, cloud-synced platform.")
+        
     with c2:
-        st.markdown("<div style='height: 50px;'></div>", unsafe_allow_html=True)
-        st.markdown("<h1 style='text-align: center;'>🔐 Login Portal</h1>", unsafe_allow_html=True)
+        st.markdown("<div style='height: 20px;'></div>", unsafe_allow_html=True)
+        st.markdown("<h1 class='login-header'>Login Portal</h1>", unsafe_allow_html=True)
         st.markdown("<p class='slogan-style'>Your School, Connected. Anytime, Anywhere.</p>", unsafe_allow_html=True)
+        
         mode = get_data_mode()
-        status_color = "var(--success-color)" if mode == "Cloud" else "var(--warning-color)"
-        st.markdown(f"<p style='text-align:center;'>Status: <span style='color:{status_color}; font-weight:bold'>{mode}</span></p>", unsafe_allow_html=True)
+        if mode == 'Cloud':
+            st.success("✅ System Online (Cloud Connected)")
+        else:
+            st.warning("⚠️ Offline Mode (Local Database)")
+            
+        st.markdown("---")
         
         tab1, tab2 = st.tabs(["Staff Login", "Student Portal"])
         with tab1:
             with st.form("staff_login"):
-                u = st.text_input("Username")
-                p = st.text_input("Password", type="password")
-                if st.form_submit_button("Login"):
+                u = st.text_input("Username", placeholder="e.g. teacher1")
+                p = st.text_input("Password", type="password", placeholder="••••••")
+                if st.form_submit_button("Sign In"):
                     user = login_staff(u, p)
                     if user:
-                        with st.spinner("Syncing..."): perform_login_sync()
+                        with st.spinner("Authenticating..."): perform_login_sync()
                         st.session_state.logged_in = True
                         st.session_state.user = user
                         st.session_state.role = user[2]
-                        st.success(f"Welcome, {user[0]}!")
+                        st.success(f"Welcome back, {user[0]}!")
                         time.sleep(0.5); st.rerun()
                     else: st.error("Invalid credentials")
+            
             with st.expander("Register New Teacher"):
                 with st.form("reg_form"):
                     nu = st.text_input("New Username")
@@ -837,12 +899,12 @@ def login_screen():
                         else: st.error(msg)
         with tab2:
             with st.form("student_login"):
-                sid = st.text_input("Student ID")
-                sp = st.text_input("Password", type="password")
-                if st.form_submit_button("Access Portal"):
+                sid = st.text_input("Student ID", placeholder="e.g. 10101")
+                sp = st.text_input("Password", type="password", placeholder="Default is your Student ID")
+                if st.form_submit_button("Access Student Portal"):
                     s_user = login_student(sid, sp)
                     if s_user:
-                        with st.spinner("Syncing..."): perform_login_sync()
+                        with st.spinner("Loading Profile..."): perform_login_sync()
                         st.session_state.logged_in = True
                         st.session_state.user = s_user
                         st.session_state.role = "Student"
@@ -856,143 +918,166 @@ def sidebar_menu():
         role = st.session_state.get('role', 'Teacher')
         user_data = st.session_state.user
         
-        if role == "Admin":
-            st.markdown(f"### 🛡️ Admin")
-            menu = st.radio("Menu", ["Dashboard", "👥 Manage Teachers", "🎓 Manage Students"])
-        elif role == "Teacher":
-            username = user_data[0]
-            st.markdown(f"### 👨‍🏫 {username}")
-            pic = user_data[3]
-            if pic: st.image(Image.open(io.BytesIO(pic)), width=120)
-            else: st.image("https://cdn-icons-png.flaticon.com/512/1995/1995539.png", width=120)
-            
-            with st.expander("📷 Photo"):
+        # Profile Header
+        st.markdown("<div style='text-align: center;'>", unsafe_allow_html=True)
+        pic = user_data[3]
+        if pic: 
+            st.image(Image.open(io.BytesIO(pic)), width=100)
+        else: 
+            st.image("https://cdn-icons-png.flaticon.com/512/1995/1995539.png" if role != "Student" else "https://cdn-icons-png.flaticon.com/512/3237/3237472.png", width=100)
+        st.markdown("</div>", unsafe_allow_html=True)
+        
+        st.markdown(f"<h3 style='text-align: center; margin-bottom: 0px;'>{user_data[0] if role == 'Teacher' or role == 'Admin' else user_data[1]}</h3>", unsafe_allow_html=True)
+        st.markdown(f"<p style='text-align: center; color: gray;'>{role}</p>", unsafe_allow_html=True)
+
+        if role == "Teacher":
+            with st.expander("📷 Change Photo"):
                 ukey = st.session_state.uploader_key
                 up = st.file_uploader("Up", type=['jpg','png'], label_visibility="collapsed", key=f"t_up_{ukey}")
                 if up:
                     img_bytes = up.getvalue()
-                    update_teacher_pic(username, img_bytes)
+                    update_teacher_pic(user_data[0], img_bytes)
                     new_user_data = (user_data[0], user_data[1], user_data[2], img_bytes)
                     st.session_state.user = new_user_data
                     st.toast("✅ Photo Updated!")
                     st.session_state.uploader_key += 1
                     time.sleep(1.0); st.rerun()
-            
-            st.markdown("---")
-            menu = st.radio("Menu", ["Dashboard", "📂 Student Roster", "📝 Input Grades", "📊 Gradebook", "👤 Student Record", "⚙️ Account Settings"])
+
+        st.markdown("---")
+        
+        if role == "Admin":
+            menu = st.radio("Navigation", ["Dashboard", "👥 Manage Teachers", "🎓 Manage Students"])
+        elif role == "Teacher":
+            menu = st.radio("Navigation", ["Dashboard","📋 Attendance", "📂 Student Roster", "📝 Input Grades", "📊 Gradebook", "👤 Student Record", "⚙️ Settings"])
         else:
-            s_name = user_data[1]
-            s_id = user_data[0]
-            s_pic = user_data[3]
-            st.markdown(f"### 🎓 {s_name}")
-            if s_pic: st.image(Image.open(io.BytesIO(s_pic)), width=120)
-            else: st.image("https://cdn-icons-png.flaticon.com/512/3237/3237472.png", width=120)
-            st.caption(f"ID: {s_id}")
-            st.markdown("---")
-            menu = st.radio("Menu", ["📜 My Grades", "⚙️ Settings"])
+            menu = st.radio("Navigation", ["📜 My Grades", "⚙️ Settings"])
         
         st.markdown("---")
-        if st.button("🚪 Log Out", width="stretch"):
+        if st.button("🚪 Log Out", use_container_width=True):
             st.session_state.logged_in = False
             st.rerun()
+            
+        st.markdown("<p style='text-align: center; font-size: 0.8rem; color: #bbb; margin-top: 20px;'>SGS Pro Connect v2.0</p>", unsafe_allow_html=True)
         
         return menu
 
 # --- PAGE FUNCTIONS ---
-
 def page_dashboard():
     st.title("📊 Dashboard")
     user = st.session_state.user[0]
     
-    # --- 1. FETCH DATA ---
-    # Get Teacher's Subjects
+    # 1. FETCH DATA
     subs = get_teacher_subjects_full(user)
-    
-    # Get System-Wide Teacher Count
-    all_users = fetch_all_records("Users")
-    teacher_count = sum(1 for u in all_users if u.get('role') == 'Teacher')
-    
-    # Get System-Wide Student Count (NEW FIX)
     all_active_students = get_all_active_students_list()
     total_system_students = len(all_active_students)
     
-    # Calculate "My Students" for the subject breakdown
+    # FETCH GRADES FOR COUNTING
+    # We fetch all grades once to accurately count unique students
+    all_grades = fetch_all_records("Grades")
+    
     subject_details = []
-    my_total_students = 0
+    unique_student_ids_overall = set()
+    
     for s_id, s_name in subs:
-        cnt = get_subject_student_count(s_name)
-        my_total_students += cnt
+        # Filter grades for this subject
+        s_grades = [g for g in all_grades if g['subject'] == s_name]
+        
+        # Count unique students for this subject (ignoring multiple quarters)
+        unique_s_ids = set(clean_id(g['student_id']) for g in s_grades)
+        
+        cnt = len(unique_s_ids)
+        unique_student_ids_overall.update(unique_s_ids)
+        
         subject_details.append((s_id, s_name, cnt))
         
-    # --- 2. METRICS ROW ---
+    # Total unique students across all subjects
+    my_total_students = len(unique_student_ids_overall)
+        
+    # 2. METRICS ROW
     c1, c2, c3 = st.columns(3)
     
-    # Metric 1: My Subjects
-    c1.metric("My Subjects", len(subs), help=f"You teach {my_total_students} students total")
+    # --- UPDATED LABEL HERE ---
+    c1.metric("Number of Students", my_total_students, help="Total unique students you teach")
     
-    # Metric 2: System-Wide Active Students (FIXED)
-    c2.metric("Total Active Students", total_system_students, delta="School Wide", delta_color="off")
+    c2.metric("Total Active Students", total_system_students, delta="School Wide")
+    c3.metric("System Mode", "Online" if get_data_mode() == 'Cloud' else "Offline")
     
-    # Metric 3: System-Wide Teachers
-    c3.metric("Total Teachers", teacher_count, delta="School Wide", delta_color="off")
-    
-    # --- 3. SUBJECT CARDS ---
-    st.markdown("### 📚 My Subjects")
     st.markdown("---")
     
-    if not subject_details:
-        st.info("You haven't added any subjects yet.")
+    col_chart, col_subjects = st.columns([2, 1])
     
-    for s_id, s_name, cnt in subject_details:
-        label = f"📘 {s_name} ({cnt} Students)"
-        with st.expander(label):
-            st.caption(f"Manage settings for {s_name}")
-            c_a, c_b = st.columns([3, 1])
-            new_name = c_a.text_input("Rename Subject", value=s_name, key=f"ren_{s_id}")
-            if c_b.button("Update", key=f"btn_ren_{s_id}"):
-                update_subject(s_id, new_name)
-                st.success("Renamed!")
-                time.sleep(1)
-                st.rerun()
+    with col_chart:
+        st.subheader("📈 Student Distribution")
+        if not all_active_students.empty:
+            chart_data = all_active_students['grade_level'].value_counts().reset_index()
+            chart_data.columns = ['Grade Level', 'Count']
             
-            st.markdown("---")
-            if st.button("🗑️ Delete Subject", key=f"btn_del_{s_id}", help="This will remove the subject from your list."):
-                delete_subject(s_id)
-                st.warning("Deleted!")
-                time.sleep(1)
-                st.rerun()
+            c = alt.Chart(chart_data).mark_bar().encode(
+                x='Grade Level',
+                y='Count',
+                color=alt.Color('Grade Level', legend=None),
+                tooltip=['Grade Level', 'Count']
+            ).properties(height=300)
+            st.altair_chart(c, use_container_width=True)
+        else:
+            st.info("No student data available for charts.")
 
-    # --- 4. ADD NEW SUBJECT FORM ---
-    st.markdown("### ➕ Add New Subject")
-    with st.form("add_sub"):
-        c_add1, c_add2 = st.columns([3, 1])
-        new_s = c_add1.text_input("Subject Name", placeholder="e.g. Mathematics M1")
-        if c_add2.form_submit_button("Add Subject"):
-            if new_s:
-                ok, msg = add_subject(user, new_s)
-                if ok: 
-                    st.success(msg)
-                    time.sleep(1)
-                    st.rerun()
-                else: 
-                    st.error(msg)
+    with col_subjects:
+        st.subheader("📚 My Subjects")
+        if not subject_details:
+            st.info("You haven't added any subjects yet.")
+        else:
+            for s_id, s_name, cnt in subject_details:
+                with st.expander(f"📘 {s_name}"):
+                    st.caption(f"{cnt} Students")
+                    c_a, c_b = st.columns([2, 1])
+                    new_name = c_a.text_input("Rename", value=s_name, key=f"ren_{s_id}", label_visibility="collapsed")
+                    if c_b.button("Save", key=f"btn_ren_{s_id}"):
+                        update_subject(s_id, new_name)
+                        st.toast("Renamed Successfully!")
+                        time.sleep(1); st.rerun()
+                    if st.button("Delete", key=f"btn_del_{s_id}", type="primary"):
+                        delete_subject(s_id)
+                        st.rerun()
+
+    # ADD SUBJECT
+    with st.popover("➕ Add New Subject"):
+        with st.form("add_sub"):
+            new_s = st.text_input("Subject Name", placeholder="e.g. Mathematics M1")
+            if st.form_submit_button("Add Subject"):
+                if new_s:
+                    ok, msg = add_subject(user, new_s)
+                    if ok: st.success(msg); time.sleep(1); st.rerun()
+                    else: st.error(msg)
 
 def page_admin_dashboard():
     st.title("🛡️ Admin Dashboard")
     u, a, d, t, b, subs = get_admin_stats()
+    
+    st.markdown("### System Overview")
     c1, c2, c3, c4 = st.columns(4)
     c1.metric("Total Users", u)
     c2.metric("Active Students", a)
-    c3.metric("Subjects", subs)
-    c4.metric("Dropped/Transferred", d+t)
+    c3.metric("Subjects Taught", subs)
+    c4.metric("Inactive/Bin", d+t+b)
+    
+    st.markdown("### Quick Actions")
+    c_a, c_b = st.columns(2)
+    with c_a:
+        st.info("💡 To manage accounts, use the sidebar menu.")
+    with c_b:
+        if st.button("🔄 Force Cloud Sync"):
+            with st.spinner("Syncing..."):
+                perform_login_sync()
+            st.success("Sync Complete!")
 
 def page_admin_manage_teachers():
     st.title("👥 Manage Teachers")
     teachers = get_all_teachers_with_counts()
-    if not teachers.empty: st.dataframe(teachers, width=1000, hide_index=True)
+    if not teachers.empty: st.dataframe(teachers, width="stretch", hide_index=True)
     else: st.info("No teachers found.")
     
-    t1, t2, t3 = st.tabs(["Reset Password", "Delete Teacher", "Update Photo"])
+    t1, t2 = st.tabs(["Reset Password", "Delete Teacher"])
     
     with t1:
         with st.form("reset_t_pass"):
@@ -1003,19 +1088,12 @@ def page_admin_manage_teachers():
                 st.success(f"Password for {t_user} reset.")
     
     with t2:
-        st.markdown("### 🗑️ Delete Teacher")
+        st.warning("Danger Zone")
         del_t = st.text_input("Enter Username to DELETE")
-        if st.button("Delete Teacher"):
-            delete_teacher(del_t); st.warning(f"Teacher {del_t} deleted."); time.sleep(1); st.rerun()
-            
-    with t3:
-        st.markdown("### 📷 Update Teacher Photo")
-        if not teachers.empty:
-            target_t = st.selectbox("Select Teacher", teachers['username'].unique())
-            up_t = st.file_uploader("Upload New Photo", type=['jpg','png'], key="adm_t_up")
-            if up_t and st.button("Save Photo"):
-                update_teacher_pic(target_t, up_t.getvalue())
-                st.success(f"Photo for {target_t} updated!")
+        if st.button("Permanently Delete Teacher"):
+            delete_teacher(del_t)
+            st.warning(f"Teacher {del_t} deleted.")
+            time.sleep(1); st.rerun()
 
 def page_admin_manage_students():
     st.title("🎓 Manage Students (Admin)")
@@ -1024,7 +1102,7 @@ def page_admin_manage_students():
         df = get_all_students_admin()
         search = st.text_input("🔍 Search Student", key="adm_search")
         if search: df = df[df['student_name'].str.contains(search, case=False) | df['student_id'].astype(str).str.contains(search)]
-        st.dataframe(df, width=1000, hide_index=True)
+        st.dataframe(df, width="stretch", hide_index=True)
     with tab_edit:
         st.markdown("### ✏️ Edit Student Account")
         c1, c2, c3 = st.columns([1,2,1])
@@ -1050,7 +1128,7 @@ def page_admin_manage_students():
         df_del = get_all_students_admin(include_deleted=True)
         if not df_del.empty: df_del = df_del[df_del['status'] == 'Deleted']
         if not df_del.empty:
-            st.dataframe(df_del, width=1000, hide_index=True)
+            st.dataframe(df_del, width="stretch", hide_index=True)
             res_id = st.selectbox("Select Student to Restore", df_del['student_id'].astype(str) + " - " + df_del['student_name'])
             if st.button("♻️ Restore Selected"):
                 sid_only = res_id.split(" - ")[0]
@@ -1058,20 +1136,45 @@ def page_admin_manage_students():
         else: st.info("Bin is empty.")
 
 def page_roster():
-    st.title("📂 Student Roster Management")
+    st.title("📂 Student Roster")
     c1, c2 = st.columns(2)
     with c1: level = st.selectbox("Level", ["M1","M2","M3","M4","M5","M6"])
     with c2: room = st.selectbox("Room", [str(i) for i in range(1,16)])
-    st.markdown("---")
-    t1, t2, t3, t4, t5, t6 = st.tabs(["📤 Bulk Upload", "➕ Manual Add", "✏️ Edit / Status", "🚀 Promote / Transfer", "🗑️ Reset Class", "🔍 Search All Students"])
+    
+    t1, t2, t3, t4 = st.tabs(["📋 Class List", "➕ Add / Upload", "✏️ Edit / Transfer", "🔍 Search All"])
     
     with t1:
-        st.info("ℹ️ Note: Uploaded students are automatically set to 'Active'.")
-        csv = pd.DataFrame({"ID":["10101","10102"], "Name":["Student A","Student B"]}).to_csv(index=False).encode('utf-8')
-        st.download_button("⬇️ Template", csv, "template.csv", "text/csv")
-        up_file = st.file_uploader("Excel/CSV", type=['xlsx','csv'], key="roster_uploader")
-        if up_file:
-            if st.button("Upload"):
+        curr = get_class_roster(level, room, only_active=False)
+        if not curr.empty:
+            def highlight_status(val):
+                if val == 'Active': return 'color: green; font-weight: bold'
+                if val == 'Deleted': return 'color: gray; text-decoration: line-through'
+                return 'color: red; font-weight: bold'
+            st.dataframe(curr[['class_no','student_id','student_name', 'status']].style.map(highlight_status, subset=['status']), hide_index=True, width="stretch")
+        else:
+            st.info("This class is empty.")
+
+    with t2:
+        c_add, c_up = st.columns(2)
+        with c_add:
+            st.markdown("### Manual Add")
+            next_no = get_next_class_no(level, room)
+            with st.form("manual_add"):
+                m_id = st.text_input("ID")
+                m_name = st.text_input("Name")
+                m_no = st.number_input("No", value=next_no, disabled=True)
+                m_stat = st.selectbox("Status", ["Active", "Transferred"])
+                if st.form_submit_button("Add Student"):
+                    if m_id and m_name:
+                        ok, msg = add_single_student(m_id, m_name, int(m_no), level, room, m_stat)
+                        if ok: st.success(msg); time.sleep(1); st.rerun()
+                        else: st.error(msg)
+        with c_up:
+            st.markdown("### Bulk Upload")
+            csv = pd.DataFrame({"ID":["10101","10102"], "Name":["Student A","Student B"]}).to_csv(index=False).encode('utf-8')
+            st.download_button("⬇️ Template", csv, "template.csv", "text/csv")
+            up_file = st.file_uploader("Excel/CSV", type=['xlsx','csv'], key="roster_uploader")
+            if up_file and st.button("Upload File"):
                 try:
                     df = pd.read_csv(up_file) if up_file.name.endswith('.csv') else pd.read_excel(up_file)
                     ok, msg, errs = upload_roster(df, level, room)
@@ -1079,24 +1182,12 @@ def page_roster():
                     if errs: st.error(f"{len(errs)} Errors: " + ", ".join(errs[:5]) + "...")
                     time.sleep(1.5); st.rerun()
                 except Exception as e: st.error(str(e))
-    with t2:
-        next_no = get_next_class_no(level, room)
-        with st.form("manual_add"):
-            c_a, c_b = st.columns([1,3])
-            m_id = c_a.text_input("ID")
-            m_name = c_b.text_input("Name")
-            c_c, c_d = st.columns([1,1])
-            m_no = c_c.number_input("No", value=next_no, disabled=True)
-            m_stat = c_d.selectbox("Status", ["Active", "Dropped Out", "Transferred", "Graduate"])
-            if st.form_submit_button("✅ Add Student"):
-                if m_id and m_name:
-                    ok, msg = add_single_student(m_id, m_name, int(m_no), level, room, m_stat)
-                    if ok: st.success(msg); time.sleep(1); st.rerun()
-                    else: st.error(msg)
+    
     with t3:
+        st.markdown("### Edit & Transfer")
         roster = get_class_roster(level, room, only_active=False)
         if not roster.empty:
-            edit_target = st.selectbox("Select Student to Edit", roster['student_id'] + " - " + roster['student_name'])
+            edit_target = st.selectbox("Select Student", roster['student_id'] + " - " + roster['student_name'])
             if edit_target:
                 s_id = edit_target.split(" - ")[0]
                 curr_data = roster[roster['student_id'] == s_id].iloc[0]
@@ -1104,74 +1195,51 @@ def page_roster():
                     e_name = st.text_input("Name", value=curr_data['student_name'])
                     e_no = st.number_input("Class No", value=int(curr_data['class_no']))
                     e_stat = st.selectbox("Status", STUDENT_STATUSES, index=STUDENT_STATUSES.index(curr_data['status']))
-                    if st.form_submit_button("💾 Save Changes"):
+                    if st.form_submit_button("Save Changes"):
                         ok, msg = update_student_details(s_id, e_name, int(e_no), e_stat)
                         if ok: st.success(msg); time.sleep(1); st.rerun()
-            st.divider()
-            st.markdown("### Quick Status Update")
-            for idx, row in roster.iterrows():
-                c_x, c_y = st.columns([3, 1])
-                c_x.text(f"{row['class_no']}. {row['student_name']} ({row['status']})")
-                if c_y.button("🗑️ Bin", key=f"bin_{row['student_id']}_{idx}"): 
-                    delete_single_student(row['student_id']); st.rerun()
-        else: st.info("Class is empty.")
-    with t4:
-        st.markdown("### 🚀 Batch Promote / Transfer")
-        c_p1, c_p2 = st.columns(2)
-        to_lvl = c_p1.selectbox("To Level", ["M1","M2","M3","M4","M5","M6"], key="to_lvl")
-        to_rm = c_p2.selectbox("To Room", [str(i) for i in range(1,16)], key="to_rm")
-        if st.button(f"Move ALL Active Students from {level}/{room} to {to_lvl}/{to_rm}"):
-            ok, msg = promote_students(level, room, to_lvl, to_rm)
-            if ok: st.success(msg); time.sleep(1.5); st.rerun()
-    with t5:
-        st.markdown("### ⚠️ Danger Zone")
-        if st.button("🗑️ Delete ALL Students in this Class"):
-            ok, msg = soft_delete_class_roster(level, room)
-            if ok: st.warning(msg); time.sleep(1.5); st.rerun()
             
-    with t6:
-        st.markdown("### 🔍 Global Student Search")
-        search_term = st.text_input("Enter Student Name or ID", placeholder="Search whole school...")
+            st.divider()
+            c_p1, c_p2 = st.columns(2)
+            to_lvl = c_p1.selectbox("Promote To Level", ["M1","M2","M3","M4","M5","M6"], key="to_lvl")
+            to_rm = c_p2.selectbox("Promote To Room", [str(i) for i in range(1,16)], key="to_rm")
+            if st.button(f"🚀 Move ALL Active to {to_lvl}/{to_rm}"):
+                ok, msg = promote_students(level, room, to_lvl, to_rm)
+                if ok: st.success(msg); time.sleep(1.5); st.rerun()
+
+            if st.button("⚠️ Delete ALL in Class"):
+                 ok, msg = soft_delete_class_roster(level, room)
+                 if ok: st.warning(msg); time.sleep(1.5); st.rerun()
+
+    with t4:
+        search_term = st.text_input("Search Name/ID in School", placeholder="Enter query...")
         if search_term:
             all_studs = get_all_students_admin(include_deleted=True)
             results = all_studs[all_studs['student_name'].str.contains(search_term, case=False) | all_studs['student_id'].astype(str).str.contains(search_term)]
-            if not results.empty:
-                st.dataframe(results[['student_id', 'student_name', 'grade_level', 'room', 'status']], hide_index=True)
-            else:
-                st.info("No students found.")
-
-    st.markdown("---")
-    curr = get_class_roster(level, room, only_active=False)
-    if not curr.empty:
-        def highlight_status(val):
-            if val == 'Active': return 'color: green; font-weight: bold'
-            if val == 'Deleted': return 'color: gray; text-decoration: line-through'
-            return 'color: red; font-weight: bold'
-        st.markdown("### 📋 Class List")
-        st.dataframe(curr[['class_no','student_id','student_name', 'status']].style.map(highlight_status, subset=['status']), hide_index=True, width=1000)
+            st.dataframe(results[['student_id', 'student_name', 'grade_level', 'room', 'status']], hide_index=True, width="stretch")
 
 def page_input_grades():
-    st.title("📝 Class Record Input")
-    if 'uploader_key' not in st.session_state: st.session_state.uploader_key = 0
+    st.title("📝 Input Grades")
+    
+    # SETUP
     subs_raw = get_teacher_subjects_full(st.session_state.user[0])
     subjects = [s[1] for s in subs_raw]
-    if not subjects: st.warning("Add subjects first."); return
+    if not subjects: st.warning("Please add subjects in Dashboard first."); return
     
-    with st.expander("⚙️ Settings", expanded=True):
+    school_years = get_school_years()
+    
+    with st.expander("⚙️ Class Selection", expanded=True):
         c1,c2,c3,c4,c5 = st.columns(5)
-        yr = c1.selectbox("Year", get_school_years())
+        yr = c1.selectbox("Year", school_years, index=1) # Default to current year
         subj = c2.selectbox("Subject", subjects)
         q = c3.selectbox("Quarter", ["Q1","Q2","Q3","Q4"])
         lvl = c4.selectbox("Level", ["M1","M2","M3","M4","M5","M6"])
         rm = c5.selectbox("Room", [str(i) for i in range(1,16)])
     
     roster = get_class_roster(lvl, rm, only_active=True)
-    if roster.empty: st.warning("No Active students."); return
+    if roster.empty: st.warning("No Active students in this class."); return
 
-    c_zoom, c_pad = st.columns([1, 4])
-    with c_zoom: zoom = st.slider("🔍 Zoom Table", 80, 150, 100, 10)
-    st.markdown(f"""<style>div[data-testid="stDataFrame"] {{ zoom: {zoom}%; }}</style>""", unsafe_allow_html=True)
-    
+    # TABS FOR TESTS
     if "active_test_tab" not in st.session_state: st.session_state.active_test_tab = "Test 1"
     test_options = ["Test 1", "Test 2", "Test 3", "Final Exam", "Bulk Upload"]
     try: idx = test_options.index(st.session_state.active_test_tab)
@@ -1184,40 +1252,13 @@ def page_input_grades():
         test_name = selected_tab
         weight = 10.0
         
-        # --- STATUS BAR LOGIC ---
-        total_test_max = get_total_max_score_for_test(subj, q, yr, test_name)
-        existing_tasks = fetch_task_records(subj, q, yr, test_name)
-        pass_count = 0
-        fail_count = 0
-        
-        if total_test_max > 0:
-            for index, row in roster.iterrows():
-                sid = str(row['student_id'])
-                t_rec = existing_tasks.get(sid, {})
-                raw_total = float(t_rec.get('raw_total', 0))
-                if raw_total >= (total_test_max / 2): pass_count += 1
-                else: fail_count += 1
-        
-        # STATUS BAR DISPLAY
-        st.markdown(f"### 📊 Class Performance: {test_name} ({int(weight)}pts)")
-        with st.expander("Show/Hide Performance Stats", expanded=True):
-            m1, m2, m3, m4 = st.columns(4)
-            m1.metric("Total Students", len(roster))
-            m2.metric("Passing", pass_count, delta="Good", delta_color="normal")
-            m3.metric("Failing", fail_count, delta="-Needs Imprv", delta_color="inverse")
-            m4.metric("Test Max Score", int(total_test_max))
-        st.markdown("---")
-
-        st.markdown(f"### {test_name} Input")
-        
         # --- DYNAMIC TASK SELECTOR ---
         active_count = get_enabled_tasks_count(subj, q, yr, test_name)
         
         col_sel, col_add = st.columns([4, 1])
         with col_add:
-            if st.button("➕ Add Task"):
-                if active_count < 10:
-                    # Activate next task by setting dummy config
+            if active_count < 10:
+                if st.button("➕ Add Task", use_container_width=True):
                     next_t = active_count + 1
                     save_task_max_score(subj, q, yr, test_name, f"Task {next_t}", 0)
                     st.rerun()
@@ -1225,131 +1266,105 @@ def page_input_grades():
         with col_sel:
             options = [f"Task {i}" for i in range(1, active_count + 1)]
             options.append("All Tasks (Overview)")
-            task_choice = st.radio("Select Task to Grade", options, horizontal=True)
+            task_choice = st.radio("Task Selection", options, horizontal=True, label_visibility="collapsed")
         
+        total_test_max = get_total_max_score_for_test(subj, q, yr, test_name)
+
         if task_choice == "All Tasks (Overview)":
-            st.info("ℹ️ Overview Mode: View all enabled tasks and Weighted Score.")
-            # Calculate total max score
-            total_test_max = get_total_max_score_for_test(subj, q, yr, test_name)
-            
-            # Fetch data
+            st.info(f"Viewing all tasks for {test_name}. Total Max Score for this test: {int(total_test_max)}")
             existing_tasks = fetch_task_records(subj, q, yr, test_name)
             editor_data = []
             
             for index, row in roster.iterrows():
                 sid = str(row['student_id'])
                 t_rec = existing_tasks.get(sid, {})
-                
                 raw_sum = 0.0
-                row_data = {
-                    "No": row['class_no'], 
-                    "ID": sid, 
-                    "Name": row['student_name']
-                }
-                
-                # Add columns for active tasks
+                row_data = {"No": row['class_no'], "ID": sid, "Name": row['student_name']}
                 for i in range(1, active_count + 1):
                     val = float(t_rec.get(f't{i}', 0))
                     row_data[f"Task {i}"] = val
                     raw_sum += val
                 
-                row_data["Total Raw"] = raw_sum
-                
-                # Calc Weighted
                 w_score = 0.0
                 if total_test_max > 0:
                     w_score = (raw_sum / total_test_max) * weight
                     if w_score > weight: w_score = weight
-                row_data["Weighted Score"] = w_score
                 
-                # Status
-                status = "Pass"
-                if total_test_max > 0 and raw_sum < (total_test_max/2): status = "Fail"
-                row_data["Status"] = status
-                
+                row_data["Total Raw"] = raw_sum
+                row_data["Weighted"] = w_score
                 editor_data.append(row_data)
             
             df_editor = pd.DataFrame(editor_data)
             
-            # Dynamic Column Config
             col_config = {
                 "No": st.column_config.NumberColumn(disabled=True, width="small"),
                 "ID": st.column_config.TextColumn(disabled=True),
                 "Name": st.column_config.TextColumn(disabled=True),
                 "Total Raw": st.column_config.NumberColumn(disabled=True),
-                "Weighted Score": st.column_config.NumberColumn(disabled=True, format="%.2f"),
-                "Status": st.column_config.TextColumn(disabled=True)
+                "Weighted": st.column_config.ProgressColumn(min_value=0, max_value=weight, format="%.2f"),
             }
             
             with st.form(key=f"form_{test_name}_all"):
-                edited_df = st.data_editor(df_editor, hide_index=True, column_config=col_config, width=1200, height=500, key=f"ed_{test_name}_all")
-                if st.form_submit_button("💾 Save All Tasks"):
-                    with st.spinner("Saving batch..."):
+                edited_df = st.data_editor(
+                    df_editor, 
+                    hide_index=True, 
+                    column_config=col_config, 
+                    width="stretch", 
+                    height=500,
+                    disabled=["Weighted", "Total Raw"]
+                )
+                if st.form_submit_button("💾 Save All Changes", type="primary"):
+                    with st.spinner("Saving..."):
                         ok, msg = save_batch_tasks_and_grades(subj, q, yr, test_name, edited_df, total_test_max, weight, st.session_state.user[0])
                         if ok: st.success(msg); time.sleep(0.5); st.rerun()
 
         else:
-            # --- INDIVIDUAL TASK MODE ---
+            # INDIVIDUAL TASK MODE
             current_max = get_task_max_score(subj, q, yr, test_name, task_choice)
-            new_max = st.number_input(f"Maximum Score for {task_choice}", min_value=0.0, value=current_max, step=1.0)
+            new_max = st.number_input(f"Max Score for {task_choice}", min_value=0.0, value=current_max, step=1.0)
             
-            # SAVE MAX SCORE IF CHANGED
             if new_max != current_max:
                 save_task_max_score(subj, q, yr, test_name, task_choice, new_max)
                 st.rerun()
 
-            # DISABLE/HIDE IF MAX SCORE IS 0
             if new_max <= 0:
-                st.warning(f"⚠️ Please set the **Maximum Score** for {task_choice} above 0 to enable grading.")
+                st.warning(f"⚠️ Set Max Score > 0 to enable grading.")
             else:
                 editor_data = []
-                # Map Task Choice to DB key (Task 1 -> t1)
                 t_num = int(task_choice.split(" ")[1])
                 task_key = f"t{t_num}"
+                existing_tasks = fetch_task_records(subj, q, yr, test_name)
                 
                 for index, row in roster.iterrows():
                     sid = str(row['student_id'])
                     t_rec = existing_tasks.get(sid, {})
                     current_score = float(t_rec.get(task_key, 0))
-                    raw_total = float(t_rec.get('raw_total', 0)) 
-                    
-                    # Calc Weighted
-                    w_score = 0.0
-                    if total_test_max > 0:
-                        w_score = (raw_total / total_test_max) * weight
-                        if w_score > weight: w_score = weight
-                    
-                    row_data = {
+                    editor_data.append({
                         "No": row['class_no'], 
                         "ID": sid, 
                         "Name": row['student_name'],
-                        task_choice: current_score,
-                        "Weighted Score": w_score
-                    }
-                    editor_data.append(row_data)
+                        task_choice: current_score
+                    })
                 
                 df_editor = pd.DataFrame(editor_data)
                 col_config = {
                     "No": st.column_config.NumberColumn(disabled=True, width="small"),
                     "ID": st.column_config.TextColumn(disabled=True),
                     "Name": st.column_config.TextColumn(disabled=True),
-                    task_choice: st.column_config.NumberColumn(min_value=0, max_value=int(new_max)),
-                    "Weighted Score": st.column_config.NumberColumn(disabled=True, format="%.2f")
+                    task_choice: st.column_config.NumberColumn(min_value=0, max_value=int(new_max))
                 }
                 
                 with st.form(key=f"form_{test_name}_{task_choice}"):
-                    edited_df = st.data_editor(df_editor, hide_index=True, column_config=col_config, width=1200, height=500, key=f"ed_{test_name}_{task_choice}")
-                    if st.form_submit_button(f"💾 Save {task_choice}"):
+                    edited_df = st.data_editor(df_editor, hide_index=True, column_config=col_config, width="stretch", height=500)
+                    if st.form_submit_button(f"💾 Save {task_choice}", type="primary"):
                         with st.spinner("Saving..."):
                             ok = update_specific_task_column(subj, q, yr, test_name, task_choice, edited_df, st.session_state.user[0], total_test_max, weight)
                             if ok: st.success("Saved!"); time.sleep(0.5); st.rerun()
 
     elif "Final" in selected_tab:
-        st.markdown("### 🏁 Final Exam Input")
-        max_final = st.number_input("Perfect Score for Final Exam", min_value=1.0, value=50.0)
+        st.markdown("### 🏁 Final Exam")
+        max_final = st.number_input("Perfect Score", min_value=1.0, value=50.0)
         existing_tasks = fetch_task_records(subj, q, yr, "Final Exam")
-        pass_count = 0
-        fail_count = 0
         final_data = []
         for index, row in roster.iterrows():
             sid = str(row['student_id'])
@@ -1358,41 +1373,33 @@ def page_input_grades():
             if max_final > 0:
                 w_val = (raw_val / max_final) * 20.0
                 if w_val > 20.0: w_val = 20.0
-            if raw_val >= (max_final / 2): pass_count += 1
-            else: fail_count += 1
             final_data.append({"No": row['class_no'], "ID": sid, "Name": row['student_name'], "Raw Score": raw_val, "Weighted (20%)": w_val})
         
-        st.markdown(f"### 📊 Class Performance: Final Exam (20pts)")
-        with st.expander("Show/Hide Performance Stats", expanded=True):
-            m1, m2, m3, m4 = st.columns(4)
-            m1.metric("Total Students", len(roster))
-            m2.metric("Passing", pass_count, delta="Good", delta_color="normal")
-            m3.metric("Failing", fail_count, delta="-Needs Imprv", delta_color="inverse")
-            m4.metric("Exam Max", int(max_final))
-        st.markdown("---")
-
         df_final = pd.DataFrame(final_data)
         with st.form("final_form"):
-            edited_final = st.data_editor(df_final, hide_index=True, column_config={
+            edited_final = st.data_editor(
+                df_final, 
+                hide_index=True, 
+                column_config={
                     "No": st.column_config.NumberColumn(disabled=True, width="small"),
                     "ID": st.column_config.TextColumn(disabled=True),
                     "Name": st.column_config.TextColumn(disabled=True),
-                    "Weighted (20%)": st.column_config.NumberColumn(disabled=True, format="%.2f")
-                }, width=1000, height=500)
-            if st.form_submit_button("💾 Save Final Scores"):
+                    "Weighted (20%)": st.column_config.ProgressColumn(min_value=0, max_value=20, format="%.2f")
+                }, 
+                width="stretch", 
+                height=500,
+                disabled=["Weighted (20%)"]
+            )
+            if st.form_submit_button("💾 Save Final Scores", type="primary"):
                  with st.spinner("Saving..."):
                     ok = save_final_exam_batch(subj, q, yr, edited_final, max_final, st.session_state.user[0])
                     if ok: st.success("Saved!"); time.sleep(0.5); st.rerun()
 
     elif selected_tab == "Bulk Upload":
-        st.markdown("### 📤 Bulk Upload Grades")
+        st.markdown("### 📤 Excel Upload")
         target_test = st.selectbox("Select Target", ["Test 1", "Test 2", "Test 3", "Final Exam"])
         weight = 20.0 if target_test == "Final Exam" else 10.0
-        
-        # User defines max score for the whole upload
-        upload_max_score = st.number_input(f"Total Max Raw Score for {target_test} (Sum of all tasks)", min_value=1.0, value=50.0)
-        
-        st.info("ℹ️ Upload overwrites existing scores for this test. Columns Task 1...Task 10 are supported.")
+        upload_max_score = st.number_input(f"Total Max Raw Score for {target_test}", min_value=1.0, value=50.0)
         
         if st.button("⬇️ Download Template"):
             tmp = roster[['class_no', 'student_id', 'student_name']].copy()
@@ -1405,153 +1412,559 @@ def page_input_grades():
             st.download_button("Download .xlsx", out.getvalue(), "template.xlsx", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
             
         up_file = st.file_uploader("Upload Excel", type=['xlsx'])
-        if up_file:
-            if st.button("Process Upload"):
-                try:
-                    df = pd.read_excel(up_file)
-                    # Normalize columns if needed
-                    if "Student ID" in df.columns: df = df.rename(columns={"Student ID": "ID"})
-                    
-                    ok, msg = save_batch_tasks_and_grades(subj, q, yr, target_test, df, upload_max_score, weight, st.session_state.user[0])
-                    if ok: st.success(msg); time.sleep(1.5); st.rerun()
-                    else: st.error(msg)
-                except Exception as e: st.error(f"Error: {e}")
-
+        if up_file and st.button("Process Upload"):
+            try:
+                df = pd.read_excel(up_file)
+                if "Student ID" in df.columns: df = df.rename(columns={"Student ID": "ID"})
+                ok, msg = save_batch_tasks_and_grades(subj, q, yr, target_test, df, upload_max_score, weight, st.session_state.user[0])
+                if ok: st.success(msg); time.sleep(1.5); st.rerun()
+                else: st.error(msg)
+            except Exception as e: st.error(f"Error: {e}")
 def page_gradebook():
     st.title("📊 Gradebook")
+    
+    # 1. Select Subject
     subs_raw = get_teacher_subjects_full(st.session_state.user[0])
     subjects = [s[1] for s in subs_raw]
-    if not subjects: st.warning("No subjects"); return
+    
+    if not subjects: 
+        st.warning("No subjects assigned to you.")
+        return
+    
+    school_years = get_school_years()
+    
+    # 2. Filters
     c1,c2,c3,c4 = st.columns(4)
     s = c1.selectbox("Subject", subjects)
     l = c2.selectbox("Level", ["M1","M2","M3","M4","M5","M6"])
     r = c3.selectbox("Room", [str(i) for i in range(1,16)])
     q = c4.selectbox("Quarter", ["Q1","Q2","Q3","Q4"])
+    
+    # Get the current school year
+    yr = school_years[1] 
+    
+    # 3. Get Student Roster
     roster = get_class_roster(l, r, only_active=True)
-    if roster.empty: st.info("No students."); return
+    if roster.empty: 
+        st.info("No students found in this class.")
+        return
+        
     data = []
-    yr = get_school_years()[0] 
+    
+    # 4. Build Table (WITHOUT GPA)
     for idx, row in roster.iterrows():
         sid = str(row['student_id'])
         rec = get_grade_record(sid, s, q, yr)
+        
         if rec:
             t1, t2, t3, fin, tot = rec
-            gp = get_grade_point(float(tot))
-            data.append({"No": row['class_no'], "Name": row['student_name'], "Test 1": fmt_score(float(t1)), "Test 2": fmt_score(float(t2)), "Test 3": fmt_score(float(t3)), "Final": fmt_score(float(fin)), "Total": fmt_score(float(tot)), "GPA": gp})
+            # GPA Calculation Removed
+            data.append({
+                "No": row['class_no'], 
+                "Name": row['student_name'], 
+                "Test 1": fmt_score(float(t1)), 
+                "Test 2": fmt_score(float(t2)), 
+                "Test 3": fmt_score(float(t3)), 
+                "Final": fmt_score(float(fin)), 
+                "Total": fmt_score(float(tot))
+            })
         else:
-             data.append({"No": row['class_no'], "Name": row['student_name'], "Test 1": "-", "Test 2": "-", "Test 3": "-", "Final": "-", "Total": "-", "GPA": "-"})
-    st.dataframe(pd.DataFrame(data), hide_index=True, width=1200)
+             data.append({
+                 "No": row['class_no'], 
+                 "Name": row['student_name'], 
+                 "Test 1": "-", 
+                 "Test 2": "-", 
+                 "Test 3": "-", 
+                 "Final": "-", 
+                 "Total": "-"
+             })
     
-    # --- DOWNLOAD BUTTON ---
+    # 5. Display Table
+    st.dataframe(pd.DataFrame(data), hide_index=True, use_container_width=True)
+    
+    # 6. Export to Excel (WITHOUT GPA)
     if data:
-        # Create a new DataFrame for export with specific columns
         export_data = []
         for row in data:
+            # We explicitly define the columns here to exclude GPA
             export_data.append({
                 "No.": row["No"],
                 "Name": row["Name"],
                 "Test 1(10)": row["Test 1"],
                 "Test 2(10)": row["Test 2"],
                 "Test 3(10)": row["Test 3"],
-                "Final(20)": row["Final"]
+                "Final(20)": row["Final"],
+                "Total(50)": row["Total"]
             })
         
         df_export = pd.DataFrame(export_data)
-        
-        # Create Excel
         buffer = io.BytesIO()
         with pd.ExcelWriter(buffer, engine='xlsxwriter') as writer:
             df_export.to_excel(writer, index=False, sheet_name="Gradebook")
             
         st.download_button(
-            label="⬇️ Download Gradebook (Excel)",
+            label="⬇️ Download Excel",
             data=buffer.getvalue(),
             file_name=f"Gradebook_{s}_{l}_{r}_{q}.xlsx",
             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
         )
 
 def page_student_record_teacher_view():
-    st.title("👤 Student Individual Record")
-    active_students = get_all_active_students_list()
-    search_tabs = st.tabs(["🔍 Quick Search", "📂 Filter by Class"])
-    s_search = None
-    with search_tabs[0]:
-        if not active_students.empty:
-            active_students['label'] = active_students.apply(lambda x: f"{x['student_name']} ({x['student_id']}) - {x['grade_level']}/{x['room']}", axis=1)
-            selection = st.selectbox("Find Student", active_students['label'], index=None, placeholder="Type Name or ID...", key="quick_search")
-            if selection: s_search = selection.split('(')[1].split(')')[0]
-    with search_tabs[1]:
-        c1, c2, c3 = st.columns(3)
-        f_lvl = c1.selectbox("Level", ["M1","M2","M3","M4","M5","M6"], key="f_lvl")
-        f_rm = c2.selectbox("Room", [str(i) for i in range(1,16)], key="f_rm")
-        filtered = active_students[(active_students['grade_level'] == f_lvl) & (active_students['room'].astype(str) == f_rm)]
-        if not filtered.empty:
-            s_name_sel = c3.selectbox("Student", filtered['student_name'], key="f_stu")
-            if s_name_sel: s_search = str(filtered[filtered['student_name'] == s_name_sel].iloc[0]['student_id'])
-    if s_search:
-        details = get_student_details(s_search)
-        if details:
-            name, lvl, rm, photo, stat = details
-            c_info, c_table = st.columns([1, 3])
-            with c_info:
-                if photo: st.image(Image.open(io.BytesIO(photo)), width=150)
-                else: st.image("https://cdn-icons-png.flaticon.com/512/3135/3135715.png", width=150)
-                st.markdown(f"**{name}**\nID: {s_search} | {lvl}/{rm}\nStatus: {stat}")
-                with st.expander("📷 Update Photo"):
-                    up = st.file_uploader("Upload New Photo", type=['jpg','png'], key=f"u_stu_{s_search}")
-                    if up and st.button("Save Photo", key=f"b_stu_{s_search}"):
-                        update_student_pic(s_search, up.getvalue())
-                        st.success("Photo Updated!"); time.sleep(1); st.rerun()
-            with c_table:
-                st.markdown("### 📜 Academic History")
-                report = get_student_full_report(s_search)
-                if not report.empty:
-                    disp = report[['school_year', 'quarter', 'subject', 'total_score', 'final_score']]
-                    disp['GPA'] = disp['total_score'].apply(lambda x: get_grade_point(float(x)))
-                    st.dataframe(disp, hide_index=True)
-                else: st.info("No grades recorded.")
+    st.title("👤 Student Record & Academic History")
+
+    # --- 1. PREPARE DATA ---
+    # Fetch all students (Active only)
+    all_students = fetch_all_records("Students")
+    roster = pd.DataFrame(all_students)
+    if not roster.empty:
+        roster = roster[roster['status'] == 'Active']
+    
+    if roster.empty:
+        st.warning("No active students found in the system.")
+        return
+
+    # Helper: Custom Semester GPA Scale
+    def get_sem_gpa(score):
+        if score >= 80: return 4.0
+        elif score >= 75: return 3.5
+        elif score >= 70: return 3.0
+        elif score >= 65: return 2.5
+        elif score >= 60: return 2.0
+        elif score >= 55: return 1.5
+        elif score >= 50: return 1.0
+        else: return 0.0
+
+    # --- 2. SEARCH LOGIC (Auto-Clear) ---
+    # Initialize session state to hold the selected student view
+    if 'sr_view_student' not in st.session_state:
+        st.session_state.sr_view_student = None # Stores {'id': '...', 'name': '...'}
+
+    def perform_search():
+        query = st.session_state.sr_search_input.strip().lower()
+        if not query: return
+        
+        # Search by ID (Exact)
+        match = roster[roster['student_id'].astype(str) == query]
+        
+        # If no ID match, Search by Name (Contains)
+        if match.empty:
+            match = roster[roster['student_name'].astype(str).str.lower().str.contains(query)]
+        
+        if not match.empty:
+            # Select the first result found
+            found = match.iloc[0]
+            st.session_state.sr_view_student = {
+                'id': str(found['student_id']),
+                'name': found['student_name']
+            }
+        else:
+            st.toast(f"⚠️ Student '{query}' not found.", icon="🚫")
+        
+        # AUTO DELETE: Clear the input box
+        st.session_state.sr_search_input = ""
+
+    # The Search Box
+    st.text_input(
+        "🔍 Search Student (Type Name or ID and Press Enter)", 
+        key="sr_search_input", 
+        on_change=perform_search
+    )
+
+    # --- 3. DISPLAY RECORD ---
+    if st.session_state.sr_view_student:
+        s_id = st.session_state.sr_view_student['id']
+        s_name = st.session_state.sr_view_student['name']
+
+        # Header
+        c1, c2 = st.columns([3, 1])
+        with c1:
+            st.markdown(f"### 🎓 Academic History: {s_name} ({s_id})")
+        with c2:
+            if st.button("❌ Close Record"):
+                st.session_state.sr_view_student = None
+                st.rerun()
+        st.markdown("---")
+        
+        # Fetch Grades
+        all_grades = fetch_all_records("Grades")
+        
+        # --- SECURITY FILTER: Only show grades recorded by THIS teacher ---
+        current_teacher = st.session_state.user[0]
+        
+        student_grades = [
+            g for g in all_grades 
+            if clean_id(g['student_id']) == s_id and g['recorded_by'] == current_teacher
+        ]
+        # -----------------------------------------------------------------
+        
+        if not student_grades:
+            st.info(f"No academic records found for {s_name} recorded by you ({current_teacher}).")
+            return
+
+        # Process Grades
+        df = pd.DataFrame(student_grades)
+        
+        # Group by School Year
+        unique_years = df['school_year'].unique()
+        unique_years = sorted(unique_years, reverse=True) 
+        
+        for yr in unique_years:
+            st.markdown(f"#### 📅 School Year: {yr}")
+            
+            year_data = df[df['school_year'] == yr]
+            subjects = year_data['subject'].unique()
+            
+            academic_table = []
+            
+            for sub in subjects:
+                sub_grades = year_data[year_data['subject'] == sub]
+                teacher = sub_grades.iloc[0]['recorded_by'] if not sub_grades.empty else "Unknown"
+                
+                # Get Quarter Scores
+                def get_q_score(q_name):
+                    q_row = sub_grades[sub_grades['quarter'] == q_name]
+                    if not q_row.empty:
+                        return float(q_row.iloc[0]['total_score'])
+                    return 0.0
+
+                q1 = get_q_score("Q1")
+                q2 = get_q_score("Q2")
+                q3 = get_q_score("Q3")
+                q4 = get_q_score("Q4")
+                
+                # Calculate Semesters
+                sem1_total = q1 + q2
+                sem1_gpa = get_sem_gpa(sem1_total)
+                
+                sem2_total = q3 + q4
+                sem2_gpa = get_sem_gpa(sem2_total)
+                
+                academic_table.append({
+                    "Subject": sub,
+                    "Teacher": teacher,
+                    "Q1": fmt_score(q1),
+                    "Q2": fmt_score(q2),
+                    "1st Sem": fmt_score(sem1_total),
+                    "GPA 1": f"{sem1_gpa:.1f}",
+                    "Q3": fmt_score(q3),
+                    "Q4": fmt_score(q4),
+                    "2nd Sem": fmt_score(sem2_total),
+                    "GPA 2": f"{sem2_gpa:.1f}"
+                })
+            
+            # Display Table
+            if academic_table:
+                df_display = pd.DataFrame(academic_table)
+                st.dataframe(
+                    df_display, 
+                    hide_index=True, 
+                    use_container_width=True,
+                    column_config={
+                        "Subject": st.column_config.TextColumn("Subject", width="small"),
+                        "Teacher": st.column_config.TextColumn("Teacher", width="small"),
+                        "Q1": st.column_config.TextColumn("Q1", width="small"),
+                        "Q2": st.column_config.TextColumn("Q2", width="small"),
+                        "1st Sem": st.column_config.TextColumn("Sem 1 Total", width="small", help="Q1 + Q2"),
+                        "GPA 1": st.column_config.TextColumn("Sem 1 GPA", width="small"),
+                        "Q3": st.column_config.TextColumn("Q3", width="small"),
+                        "Q4": st.column_config.TextColumn("Q4", width="small"),
+                        "2nd Sem": st.column_config.TextColumn("Sem 2 Total", width="small", help="Q3 + Q4"),
+                        "GPA 2": st.column_config.TextColumn("Sem 2 GPA", width="small"),
+                    }
+                )
+            else:
+                st.caption("No subjects found for this year.")
+            
+            st.divider()
+
+def page_attendance():
+    st.title("📋 Class Attendance")
+    
+    # 1. Select Subject & Class
+    user = st.session_state.user[0]
+    subs_raw = get_teacher_subjects_full(user)
+    subjects = [s[1] for s in subs_raw]
+    
+    if not subjects:
+        st.warning("No subjects assigned.")
+        return
+
+    c1, c2, c3, c4 = st.columns(4)
+    subject = c1.selectbox("Subject", subjects)
+    level = c2.selectbox("Level", ["M1","M2","M3","M4","M5","M6"])
+    room = c3.selectbox("Room", [str(i) for i in range(1,16)])
+    date_sel = c4.date_input("Date", datetime.date.today())
+    
+    # 2. Get Roster
+    roster = get_class_roster(level, room, only_active=True)
+    if roster.empty:
+        st.info("No students found in this class.")
+        return
+        
+    # 3. Fetch Existing Attendance for this specific day/subject
+    date_str = str(date_sel)
+    all_att = fetch_all_records("Attendance")
+    
+    # Create a dictionary of existing status: {student_id: status}
+    existing_map = {}
+    for r in all_att:
+        if (str(r.get('subject')) == subject and 
+            str(r.get('date')) == date_str):
+            existing_map[clean_id(r['student_id'])] = r['status']
+            
+    # 4. Prepare Data for Editor
+    # Allowed statuses
+    status_options = [
+        "Present", "Sick Leave", "Excuse", "Personal Leave", 
+        "Absent", "Skip", "Activity", "Late"
+    ]
+    
+    editor_data = []
+    # Sort roster by class number just in case
+    roster['class_no'] = pd.to_numeric(roster['class_no'], errors='coerce')
+    roster = roster.sort_values('class_no')
+
+    for idx, row in roster.iterrows():
+        sid = str(row['student_id'])
+        current_status = existing_map.get(sid, "Present") # Default to Present
+        
+        editor_data.append({
+            "No.": row['class_no'],  # <--- NEW COLUMN ADDED
+            "Student ID": sid,
+            "Name": row['student_name'],
+            "Status": current_status
+        })
+        
+    df_editor = pd.DataFrame(editor_data)
+    
+    # 5. Show Data Editor
+    st.subheader(f"Date: {date_str}")
+    
+    edited_df = st.data_editor(
+        df_editor,
+        column_config={
+            "No.": st.column_config.NumberColumn("No.", disabled=True, width="small"),
+            "Student ID": st.column_config.TextColumn("ID", disabled=True, width="medium"),
+            "Name": st.column_config.TextColumn("Name", disabled=True, width="large"),
+            "Status": st.column_config.SelectboxColumn(
+                "Status",
+                options=status_options,
+                required=True,
+                width="medium"
+            )
+        },
+        hide_index=True,
+        use_container_width=True,
+        height=500
+    )
+    
+    # 6. Save Button
+    if st.button("💾 Save Attendance", type="primary"):
+        new_records = []
+        
+        # Filter out existing records for this day/subject to replace them
+        other_att = [
+            r for r in all_att 
+            if not (str(r.get('subject')) == subject and str(r.get('date')) == date_str and str(r.get('student_id')) in df_editor['Student ID'].values)
+        ]
+        
+        # Build new rows
+        timestamp = str(datetime.datetime.now())
+        for index, row in edited_df.iterrows():
+            uid = f"{row['Student ID']}_{subject}_{date_str}"
+            new_records.append({
+                "uid": uid,
+                "student_id": row['Student ID'],
+                "student_name": row['Name'],
+                "subject": subject,
+                "date": date_str,
+                "status": row['Status'],
+                "recorded_by": user,
+                "timestamp": timestamp
+            })
+            
+        # Combine and Save
+        final_list = other_att + new_records
+        overwrite_sheet_data("Attendance", final_list)
+        st.success("✅ Attendance Saved Successfully!")
+        time.sleep(1)
+        st.rerun()
+        
 
 def page_teacher_settings():
-    st.title("⚙️ Account Settings")
+    st.title("⚙️ Settings")
     current_u = st.session_state.user[0]
     current_p = st.session_state.user[1]
-    c_set1, c_set2 = st.columns(2)
-    with c_set1:
+    
+    with st.container():
+        st.subheader("Security")
         with st.form("teach_settings"):
-            st.markdown("### 🔐 Credentials")
             new_u = st.text_input("Username", value=current_u)
             new_p = st.text_input("Password", value=current_p, type="password")
-            if st.form_submit_button("💾 Update Credentials"):
+            if st.form_submit_button("Update Credentials"):
                 if new_u and new_p:
                     with st.spinner("Updating..."):
                         ok, msg = update_teacher_credentials(current_u, new_u, new_p)
                         if ok: st.success(msg); st.session_state.logged_in = False; time.sleep(2); st.rerun()
                         else: st.error(msg)
                 else: st.warning("Fields cannot be empty.")
-    with c_set2:
-        st.markdown("### 📷 Profile Picture")
-        up_t = st.file_uploader("Upload New Photo", type=['jpg','png'], key="sett_t_up")
-        if up_t and st.button("Save Profile Photo"):
-            update_teacher_pic(current_u, up_t.getvalue())
-            st.success("Photo Updated! Please log out to see changes in sidebar.")
-
 def page_student_portal_grades():
     s_data = st.session_state.user
-    s_id = s_data[0]
-    st.title("📜 My Academic Record")
-    st.info(f"Viewing grades for {s_data[1]}")
-    df = get_student_full_report(s_id)
-    if not df.empty:
-        df['GPA'] = df['total_score'].apply(lambda x: get_grade_point(float(x)))
-        st.dataframe(df[['school_year','quarter','subject','test1','test2','test3','final_score','total_score','GPA']], hide_index=True)
-    else: st.info("No grades available yet.")
-    st.markdown("### 📊 Task Details")
-    yr = get_school_years()[0] 
+    s_id = str(s_data[0]) # Ensure string format
+    s_name = s_data[1]
+    
+    st.title(f"👋 Hello, {s_name}")
+    st.caption(f"Student ID: {s_id}")
+
+    # --- HELPER: GPA SCALE ---
+    def get_sem_gpa(score):
+        if score >= 80: return 4.0
+        elif score >= 75: return 3.5
+        elif score >= 70: return 3.0
+        elif score >= 65: return 2.5
+        elif score >= 60: return 2.0
+        elif score >= 55: return 1.5
+        elif score >= 50: return 1.0
+        else: return 0.0
+
+    # --- 1. REPORT CARD SECTION ---
+    st.header("📜 Report Card")
+    
+    # Fetch all grades
+    all_grades = fetch_all_records("Grades")
+    # Filter for this student
+    my_grades = [g for g in all_grades if clean_id(g['student_id']) == s_id]
+
+    if not my_grades:
+        st.info("No academic records found.")
+    else:
+        df_grades = pd.DataFrame(my_grades)
+        
+        # Group by School Year (Newest first)
+        unique_years = sorted(df_grades['school_year'].unique(), reverse=True)
+        
+        for yr in unique_years:
+            with st.container():
+                st.subheader(f"📅 School Year: {yr}")
+                
+                # Filter for this year
+                year_data = df_grades[df_grades['school_year'] == yr]
+                subjects = year_data['subject'].unique()
+                
+                report_card_data = []
+                
+                for sub in subjects:
+                    # Get entries for this subject
+                    sub_entries = year_data[year_data['subject'] == sub]
+                    
+                    # Teacher Name (from most recent entry)
+                    teacher = sub_entries.iloc[0]['recorded_by'] if not sub_entries.empty else "-"
+
+                    # Extract Quarters
+                    def get_score(q_name):
+                        row = sub_entries[sub_entries['quarter'] == q_name]
+                        return float(row.iloc[0]['total_score']) if not row.empty else 0.0
+                    
+                    q1 = get_score("Q1")
+                    q2 = get_score("Q2")
+                    q3 = get_score("Q3")
+                    q4 = get_score("Q4")
+                    
+                    # Calculate Semesters
+                    sem1_total = q1 + q2
+                    sem1_gpa = get_sem_gpa(sem1_total)
+                    
+                    sem2_total = q3 + q4
+                    sem2_gpa = get_sem_gpa(sem2_total)
+                    
+                    report_card_data.append({
+                        "Subject": sub,
+                        "Teacher": teacher,
+                        "Q1": fmt_score(q1),
+                        "Q2": fmt_score(q2),
+                        "1st Sem Total": fmt_score(sem1_total),
+                        "1st Sem GPA": f"{sem1_gpa:.1f}",
+                        "Q3": fmt_score(q3),
+                        "Q4": fmt_score(q4),
+                        "2nd Sem Total": fmt_score(sem2_total),
+                        "2nd Sem GPA": f"{sem2_gpa:.1f}"
+                    })
+                
+                if report_card_data:
+                    df_display = pd.DataFrame(report_card_data)
+                    
+                    # Display Table
+                    st.dataframe(
+                        df_display,
+                        hide_index=True,
+                        use_container_width=True,
+                        column_config={
+                            "Subject": st.column_config.TextColumn("Subject", width="medium"),
+                            "Teacher": st.column_config.TextColumn("Teacher", width="small"),
+                            "Q1": st.column_config.TextColumn("Q1", width="small"),
+                            "Q2": st.column_config.TextColumn("Q2", width="small"),
+                            "1st Sem Total": st.column_config.TextColumn("Sem 1 Score", width="small", help="Sum of Q1 + Q2"),
+                            "1st Sem GPA": st.column_config.TextColumn("Sem 1 GPA", width="small"),
+                            "Q3": st.column_config.TextColumn("Q3", width="small"),
+                            "Q4": st.column_config.TextColumn("Q4", width="small"),
+                            "2nd Sem Total": st.column_config.TextColumn("Sem 2 Score", width="small", help="Sum of Q3 + Q4"),
+                            "2nd Sem GPA": st.column_config.TextColumn("Sem 2 GPA", width="small"),
+                        }
+                    )
+                    
+                    # DOWNLOAD BUTTON
+                    buffer = io.BytesIO()
+                    with pd.ExcelWriter(buffer, engine='xlsxwriter') as writer:
+                        df_display.to_excel(writer, index=False, sheet_name=f"Report_{yr}")
+                    
+                    st.download_button(
+                        label=f"⬇️ Download Report Card ({yr})",
+                        data=buffer.getvalue(),
+                        file_name=f"Report_Card_{s_name}_{yr}.xlsx",
+                        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                    )
+                else:
+                    st.caption("No grades recorded for this year.")
+                st.divider()
+
+    # --- 2. TASK BREAKDOWN SECTION ---
+    st.header("📊 Task Breakdown")
+    
+    # Fetch all tasks
     all_tasks = fetch_all_records("Tasks")
-    student_tasks = [t for t in all_tasks if str(t['student_id']) == str(s_id) and t['school_year'] == yr]
-    if student_tasks:
-        st.dataframe(pd.DataFrame(student_tasks)[['subject', 'quarter', 'test_name', 't1', 't2', 't3', 't4', 't5', 'raw_total']], hide_index=True, width=1000)
-    else: st.caption("No task details found.")
+    my_tasks = [t for t in all_tasks if clean_id(t['student_id']) == s_id]
+    
+    if not my_tasks:
+        st.info("No detailed tasks found.")
+    else:
+        df_tasks = pd.DataFrame(my_tasks)
+        
+        # Group by School Year
+        task_years = sorted(df_tasks['school_year'].unique(), reverse=True)
+        
+        for yr in task_years:
+            with st.expander(f"📅 Tasks for School Year: {yr}", expanded=False):
+                yr_tasks = df_tasks[df_tasks['school_year'] == yr]
+                
+                # Group by Subject
+                unique_subs = yr_tasks['subject'].unique()
+                
+                for sub in unique_subs:
+                    st.markdown(f"**📘 {sub}**")
+                    sub_tasks = yr_tasks[yr_tasks['subject'] == sub]
+                    
+                    # Simplify columns for display
+                    # Showing Test Name, Quarter, and Raw Score
+                    display_cols = sub_tasks[['quarter', 'test_name', 'raw_total']]
+                    display_cols.columns = ['Quarter', 'Task / Exam Name', 'My Score']
+                    
+                    st.dataframe(
+                        display_cols, 
+                        hide_index=True, 
+                        use_container_width=True
+                    )
+                    st.write("") # Spacer
+
 
 def page_student_settings():
     st.title("⚙️ My Settings")
@@ -1590,10 +2003,11 @@ else:
     elif st.session_state.role == "Teacher":
         if sel == "Dashboard": page_dashboard()
         elif sel == "📂 Student Roster": page_roster()
+        elif sel == "📋 Attendance": page_attendance()
         elif sel == "📝 Input Grades": page_input_grades()
         elif sel == "📊 Gradebook": page_gradebook()
         elif sel == "👤 Student Record": page_student_record_teacher_view()
-        elif sel == "⚙️ Account Settings": page_teacher_settings()
+        elif sel == "⚙️ Settings": page_teacher_settings()
     else:
         if sel == "📜 My Grades": page_student_portal_grades()
         elif sel == "⚙️ Settings": page_student_settings()
