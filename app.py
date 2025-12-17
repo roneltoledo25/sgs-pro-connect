@@ -1255,31 +1255,24 @@ def page_roster():
             all_studs = get_all_students_admin(include_deleted=True)
             results = all_studs[all_studs['student_name'].str.contains(search_term, case=False) | all_studs['student_id'].astype(str).str.contains(search_term)]
             st.dataframe(results[['student_id', 'student_name', 'grade_level', 'room', 'status']], hide_index=True, width="stretch")
-
 def page_input_grades():
     st.title("📝 Input Grades")
     st.markdown("Record and manage student scores for tests and exams.")
 
     # --- HELPER: RESET CALLBACKS ---
-    # These create the "Safety Chain". If a parent filter changes, children reset.
-    
     def reset_from_year():
-        # Year changed -> Reset Subject, Quarter, Grade, Room
         for k in ['k_subj', 'k_q', 'k_lvl', 'k_rm']:
             if k in st.session_state: del st.session_state[k]
 
     def reset_from_subject():
-        # Subject changed -> Reset Quarter, Grade, Room
         for k in ['k_q', 'k_lvl', 'k_rm']:
             if k in st.session_state: del st.session_state[k]
 
     def reset_from_quarter():
-        # Quarter changed -> Reset Grade, Room
         for k in ['k_lvl', 'k_rm']:
             if k in st.session_state: del st.session_state[k]
 
     def reset_from_level():
-        # Level changed -> Reset Room
         if 'k_rm' in st.session_state: del st.session_state['k_rm']
 
     # --- 1. SETUP & DATA FETCHING ---
@@ -1291,26 +1284,17 @@ def page_input_grades():
         return
     
     # --- SMART SCHOOL YEAR DEFAULT ---
-    # Logic: School opens in MAY. 
-    # If today is May-Dec (Month 5-12) -> We are in the start year (e.g., 2025).
-    # If today is Jan-April (Month 1-4) -> We are in the next year, so start year was last year.
-    school_years = get_school_years() # Returns list like ['2024-2025', '2025-2026']
-    
+    school_years = get_school_years()
     today = datetime.date.today()
-    if today.month >= 5: # May or later
+    if today.month >= 5: 
         academic_start_year = today.year
-    else: # Jan, Feb, Mar, Apr
+    else: 
         academic_start_year = today.year - 1
         
     target_sy_str = f"{academic_start_year}-{academic_start_year+1}"
-    
-    # Try to find this calculated year in the list to set it as default
-    try:
-        default_sy_index = school_years.index(target_sy_str)
-    except ValueError:
-        default_sy_index = 0 # Fallback to first item if not found
+    try: default_sy_index = school_years.index(target_sy_str)
+    except ValueError: default_sy_index = 0
 
-    # Fixed Options
     quarters = ["Select Quarter...", "Q1", "Q2", "Q3", "Q4"]
     levels = ["Select Grade...", "M1", "M2", "M3", "M4", "M5", "M6"]
     rooms = ["Select Room..."] + [str(i) for i in range(1, 16)]
@@ -1318,91 +1302,43 @@ def page_input_grades():
     # --- 2. SEQUENTIAL FILTER BAR ---
     with st.container(border=True):
         st.markdown("### 🔎 Select Class Context")
-        
-        # ROW 1: YEAR & SUBJECT (The most critical filters)
         c_yr, c_sub = st.columns([1, 2])
-        
         with c_yr:
-            # STEP 1: SCHOOL YEAR
-            yr = st.selectbox(
-                "📅 School Year",
-                school_years,
-                index=default_sy_index,
-                key="k_yr",
-                on_change=reset_from_year
-            )
-            
+            yr = st.selectbox("📅 School Year", school_years, index=default_sy_index, key="k_yr", on_change=reset_from_year)
         with c_sub:
-            # STEP 2: SUBJECT
-            subj = st.selectbox(
-                "1️⃣ Subject", 
-                subjects, 
-                key="k_subj", 
-                on_change=reset_from_subject
-            )
+            subj = st.selectbox("1️⃣ Subject", subjects, key="k_subj", on_change=reset_from_subject)
 
         st.divider()
-        
-        # ROW 2: QUARTER -> GRADE -> ROOM
         c_q, c_l, c_r = st.columns(3)
-
-        # STEP 3: QUARTER (Disabled until Subject picked)
         with c_q:
             q_disabled = (subj == "Select Subject...")
-            q = st.selectbox(
-                "2️⃣ Quarter", 
-                quarters, 
-                key="k_q", 
-                disabled=q_disabled, 
-                on_change=reset_from_quarter
-            )
-
-        # STEP 4: GRADE (Disabled until Quarter picked)
+            q = st.selectbox("2️⃣ Quarter", quarters, key="k_q", disabled=q_disabled, on_change=reset_from_quarter)
         with c_l:
             lvl_disabled = (q == "Select Quarter..." or q_disabled)
-            lvl_sel = st.selectbox(
-                "3️⃣ Filter Grade", 
-                levels, 
-                key="k_lvl", 
-                disabled=lvl_disabled,
-                on_change=reset_from_level
-            )
-
-        # STEP 5: ROOM (Disabled until Grade picked)
+            lvl_sel = st.selectbox("3️⃣ Filter Grade", levels, key="k_lvl", disabled=lvl_disabled, on_change=reset_from_level)
         with c_r:
             rm_disabled = (lvl_sel == "Select Grade..." or lvl_disabled)
-            rm_sel = st.selectbox(
-                "4️⃣ Filter Room", 
-                rooms, 
-                key="k_rm", 
-                disabled=rm_disabled
-            )
+            rm_sel = st.selectbox("4️⃣ Filter Room", rooms, key="k_rm", disabled=rm_disabled)
 
-    # --- 3. LOGIC GATE: ARE FILTERS READY? ---
-    filters_complete = (
-        subj != "Select Subject..." and 
-        q != "Select Quarter..." and 
-        lvl_sel != "Select Grade..." and 
-        rm_sel != "Select Room..."
-    )
+    # --- 3. LOGIC GATE ---
+    filters_complete = (subj != "Select Subject..." and q != "Select Quarter..." and lvl_sel != "Select Grade..." and rm_sel != "Select Room...")
 
     if not filters_complete:
-        # Guidance Messages to help the user flow
-        if subj == "Select Subject...":
-            st.info(f"👆 Confirm School Year is **{yr}**, then select the **Subject**.")
-        elif q == "Select Quarter...":
-            st.info("👆 Now select the **Quarter**.")
-        elif lvl_sel == "Select Grade...":
-            st.info("👆 Next, choose the **Grade Level**.")
-        elif rm_sel == "Select Room...":
-            st.info("👆 Finally, select the **Room Number**.")
-        return  # Stop execution here
+        if subj == "Select Subject...": st.info(f"👆 Confirm School Year is **{yr}**, then select the **Subject**.")
+        elif q == "Select Quarter...": st.info("👆 Now select the **Quarter**.")
+        elif lvl_sel == "Select Grade...": st.info("👆 Next, choose the **Grade Level**.")
+        elif rm_sel == "Select Room...": st.info("👆 Finally, select the **Room Number**.")
+        return
 
     # --- 4. LOAD DATA ---
     lvl = lvl_sel
     rm = rm_sel
     
     roster = get_class_roster(lvl, rm, only_active=True)
+    if not roster.empty and 'class_no' in roster.columns:
+         roster['class_no'] = pd.to_numeric(roster['class_no'], errors='coerce').fillna(999).astype(int)
+         roster = roster.sort_values(by="class_no")
+    
     if roster.empty: 
         st.warning(f"⚠️ No active students found in **{lvl}/{rm}**.")
         return
@@ -1442,7 +1378,7 @@ def page_input_grades():
         total_test_max = get_total_max_score_for_test(subj, q, yr, test_name)
 
         if task_choice == "All Tasks (Overview)":
-            st.info(f"Viewing all tasks for {test_name}. Total Max Score for this test: {int(total_test_max)}")
+            st.info(f"Viewing all tasks for {test_name}. Total Max Score: {int(total_test_max)}")
             existing_tasks = fetch_task_records(subj, q, yr, test_name)
             editor_data = []
             
@@ -1451,9 +1387,11 @@ def page_input_grades():
                 t_rec = existing_tasks.get(sid, {})
                 raw_sum = 0.0
                 row_data = {"No": row['class_no'], "ID": sid, "Name": row['student_name']}
+                
                 for i in range(1, active_count + 1):
-                    val = float(t_rec.get(f't{i}', 0))
-                    row_data[f"Task {i}"] = val
+                    val = t_rec.get(f't{i}') or t_rec.get(f'Task {i}') or t_rec.get(f'task{i}') or 0
+                    val = float(val)
+                    row_data[f"Task {i}"] = int(val) 
                     raw_sum += val
                 
                 w_score = 0.0
@@ -1461,22 +1399,29 @@ def page_input_grades():
                     w_score = (raw_sum / total_test_max) * weight
                     if w_score > weight: w_score = weight
                 
-                row_data["Total Raw"] = raw_sum
-                row_data["Weighted"] = w_score
+                # --- CHANGE 1: Round Weighted Score to Integer ---
+                row_data["Total Raw"] = int(raw_sum)
+                row_data["Weighted"] = int(round(w_score)) 
                 editor_data.append(row_data)
             
             df_editor = pd.DataFrame(editor_data)
             
+            # --- CHANGE 2: Configure Column to display as Integer (%d) ---
             col_config = {
                 "No": st.column_config.NumberColumn(disabled=True, width="small"),
                 "ID": st.column_config.TextColumn(disabled=True),
                 "Name": st.column_config.TextColumn(disabled=True),
-                "Total Raw": st.column_config.NumberColumn(disabled=True),
-                "Weighted": st.column_config.ProgressColumn(min_value=0, max_value=weight, format="%.2f"),
+                "Total Raw": st.column_config.NumberColumn(disabled=True, format="%d"),
+                "Weighted": st.column_config.ProgressColumn(
+                    min_value=0, 
+                    max_value=weight, 
+                    format="%d" # Displays whole number
+                ),
             }
-            
+            for i in range(1, active_count + 1):
+                 col_config[f"Task {i}"] = st.column_config.NumberColumn(step=1, format="%d")
+
             with st.form(key=f"form_{test_name}_all"):
-                # FIX: Use width="stretch" instead of use_container_width=True
                 edited_df = st.data_editor(
                     df_editor, 
                     hide_index=True, 
@@ -1490,14 +1435,13 @@ def page_input_grades():
                         ok, msg = save_batch_tasks_and_grades(subj, q, yr, test_name, edited_df, total_test_max, weight, st.session_state.user[0])
                         if ok: 
                             st.success(msg)
-                            # RESET FILTERS
                             for k in ['k_subj', 'k_q', 'k_lvl', 'k_rm']:
                                 if k in st.session_state: del st.session_state[k]
                             time.sleep(1)
                             st.rerun()
 
         else:
-            # INDIVIDUAL TASK MODE
+            # INDIVIDUAL TASK MODE (Remains mostly same, just checking keys)
             current_max = get_task_max_score(subj, q, yr, test_name, task_choice)
             new_max = st.number_input(f"Max Score for {task_choice}", min_value=0.0, value=current_max, step=1.0)
             
@@ -1510,18 +1454,22 @@ def page_input_grades():
             else:
                 editor_data = []
                 t_num = int(task_choice.split(" ")[1])
-                task_key = f"t{t_num}"
+                keys_to_check = [f"t{t_num}", f"Task {t_num}", f"task{t_num}"]
                 existing_tasks = fetch_task_records(subj, q, yr, test_name)
                 
                 for index, row in roster.iterrows():
                     sid = str(row['student_id'])
                     t_rec = existing_tasks.get(sid, {})
-                    current_score = float(t_rec.get(task_key, 0))
+                    current_score = 0
+                    for k in keys_to_check:
+                        if k in t_rec:
+                            current_score = float(t_rec[k])
+                            break
                     editor_data.append({
                         "No": row['class_no'], 
                         "ID": sid, 
                         "Name": row['student_name'],
-                        task_choice: current_score
+                        task_choice: int(current_score)
                     })
                 
                 df_editor = pd.DataFrame(editor_data)
@@ -1529,18 +1477,16 @@ def page_input_grades():
                     "No": st.column_config.NumberColumn(disabled=True, width="small"),
                     "ID": st.column_config.TextColumn(disabled=True),
                     "Name": st.column_config.TextColumn(disabled=True),
-                    task_choice: st.column_config.NumberColumn(min_value=0, max_value=int(new_max))
+                    task_choice: st.column_config.NumberColumn(min_value=0, max_value=int(new_max), step=1, format="%d")
                 }
                 
                 with st.form(key=f"form_{test_name}_{task_choice}"):
-                    # FIX: Use width="stretch"
                     edited_df = st.data_editor(df_editor, hide_index=True, column_config=col_config, width="stretch", height=500)
                     if st.form_submit_button(f"💾 Save {task_choice} & Reset", type="primary"):
                         with st.spinner("Saving..."):
                             ok = update_specific_task_column(subj, q, yr, test_name, task_choice, edited_df, st.session_state.user[0], total_test_max, weight)
                             if ok: 
                                 st.success("Saved Successfully!")
-                                # RESET FILTERS
                                 for k in ['k_subj', 'k_q', 'k_lvl', 'k_rm']:
                                     if k in st.session_state: del st.session_state[k]
                                 time.sleep(1)
@@ -1554,24 +1500,39 @@ def page_input_grades():
         final_data = []
         for index, row in roster.iterrows():
             sid = str(row['student_id'])
-            raw_val = float(existing_tasks.get(sid, {}).get('raw_total', 0))
+            t_rec = existing_tasks.get(sid, {})
+            raw_val = float(t_rec.get('raw_total') or t_rec.get('Raw Score') or t_rec.get('score') or 0)
+            
             w_val = 0.0
             if max_final > 0:
                 w_val = (raw_val / max_final) * 20.0
                 if w_val > 20.0: w_val = 20.0
-            final_data.append({"No": row['class_no'], "ID": sid, "Name": row['student_name'], "Raw Score": raw_val, "Weighted (20%)": w_val})
+            
+            # --- CHANGE 3: Final Exam Weighted Score -> Whole Number ---
+            final_data.append({
+                "No": row['class_no'], 
+                "ID": sid, 
+                "Name": row['student_name'], 
+                "Raw Score": int(raw_val), 
+                "Weighted (20%)": int(round(w_val)) # Rounded Integer
+            })
         
         df_final = pd.DataFrame(final_data)
         with st.form("final_form"):
-            # FIX: Use width="stretch"
             edited_final = st.data_editor(
                 df_final, 
                 hide_index=True, 
+                # --- CHANGE 4: Format Final Column as Integer ---
                 column_config={
                     "No": st.column_config.NumberColumn(disabled=True, width="small"),
                     "ID": st.column_config.TextColumn(disabled=True),
                     "Name": st.column_config.TextColumn(disabled=True),
-                    "Weighted (20%)": st.column_config.ProgressColumn(min_value=0, max_value=20, format="%.2f")
+                    "Raw Score": st.column_config.NumberColumn(format="%d", step=1),
+                    "Weighted (20%)": st.column_config.ProgressColumn(
+                        min_value=0, 
+                        max_value=20, 
+                        format="%d" # Displays whole number
+                    )
                 }, 
                 width="stretch", 
                 height=500,
@@ -1582,7 +1543,6 @@ def page_input_grades():
                     ok = save_final_exam_batch(subj, q, yr, edited_final, max_final, st.session_state.user[0])
                     if ok: 
                         st.success("Saved Successfully!")
-                        # RESET FILTERS
                         for k in ['k_subj', 'k_q', 'k_lvl', 'k_rm']:
                             if k in st.session_state: del st.session_state[k]
                         time.sleep(1)
@@ -1613,13 +1573,13 @@ def page_input_grades():
                 ok, msg = save_batch_tasks_and_grades(subj, q, yr, target_test, df, upload_max_score, weight, st.session_state.user[0])
                 if ok: 
                     st.success(msg)
-                    # RESET FILTERS
                     for k in ['k_subj', 'k_q', 'k_lvl', 'k_rm']:
                         if k in st.session_state: del st.session_state[k]
                     time.sleep(1.5)
                     st.rerun()
                 else: st.error(msg)
             except Exception as e: st.error(f"Error: {e}")
+
 
 def page_gradebook():
     st.title("📊 Gradebook")
@@ -1993,9 +1953,15 @@ def page_attendance():
     
     students_data = fetch_all_records("Students")
     df_students = pd.DataFrame(students_data)
+    
+    # Ensure active students only
     if not df_students.empty and 'status' in df_students.columns:
         df_students = df_students[df_students['status'] != 'Deleted']
     
+    # --- CRITICAL FIX: ENSURE CLASS_NO IS NUMERIC FOR SORTING ---
+    if not df_students.empty and 'class_no' in df_students.columns:
+        df_students['class_no'] = pd.to_numeric(df_students['class_no'], errors='coerce').fillna(999).astype(int)
+
     all_att = fetch_all_records("Attendance")
     df_att = pd.DataFrame(all_att)
 
@@ -2017,23 +1983,17 @@ def page_attendance():
             # STEP 1: SUBJECT & DATE
             c1, c2 = st.columns(2)
             with c1: 
-                selected_sub = st.selectbox(
-                    "1️⃣ Select Subject", 
-                    subjects, 
-                    key="att_sub_daily",
-                    on_change=reset_daily_filters 
-                )
+                selected_sub = st.selectbox("1️⃣ Select Subject", subjects, key="att_sub_daily", on_change=reset_daily_filters)
             with c2: 
                 date_val = st.date_input("Date", datetime.date.today())
             
             st.markdown("---")
             
             # STEP 2 & 3: GRADE & ROOM
-            # Fix: Sort levels naturally (M1, M2... not M1, M10, M2)
             unique_grades = sorted(df_students['grade_level'].unique().astype(str).tolist())
             all_grades = ["Select Grade..."] + unique_grades
             
-            # Simple room sort is fine for numbers 1-15
+            # Simple room sort (converts "1" to integer 1 so it sorts correctly)
             all_rooms = ["Select Room..."] + sorted(df_students['room'].unique().astype(str).tolist(), key=lambda x: int(x) if x.isdigit() else x)
 
             f1, f2, f3 = st.columns([1, 1, 2])
@@ -2052,14 +2012,12 @@ def page_attendance():
         if not filters_complete:
             if selected_sub == "Select Subject...":
                 st.info("👆 Please start by selecting a **Subject**.")
-            elif sel_grade == "Select Grade...":
-                st.info("👆 Good! Now select the **Grade Level**.")
-            elif sel_room == "Select Room...":
-                st.info("👆 Almost there! Select the **Room Number**.")
         else:
-            # 3. SHOW DATA
+            # 3. SHOW DATA - CORRECTED SORTING
             mask = (df_students['grade_level'].astype(str) == sel_grade) & (df_students['room'].astype(str) == sel_room)
-            df_filtered = df_students[mask].sort_values(by=["student_name"])
+            
+            # FIX 1: Sort by 'class_no' so it matches Input Grades
+            df_filtered = df_students[mask].sort_values(by=["class_no"])
 
             with f3:
                 st.success(f"**✅ Class Loaded:** {len(df_filtered)} students")
@@ -2076,7 +2034,8 @@ def page_attendance():
                 editor_rows = []
                 STATUS_OPTS = ["🟢 Present", "🔴 Absent", "🟡 Late", "⚪ Excused"]
                 
-                for i, (_, s) in enumerate(df_filtered.iterrows(), 1):
+                # FIX 2: Loop through the SORTED list
+                for _, s in df_filtered.iterrows():
                     sid = str(s['student_id']).replace(".0","")
                     current_status = existing_map.get(sid, "Present")
                     
@@ -2088,7 +2047,7 @@ def page_attendance():
                     else: disp_status = current_status
 
                     editor_rows.append({
-                        "No.": i,
+                        "No.": s['class_no'],  # FIX 3: Use actual Class No from DB
                         "Student_ID": sid,
                         "Name": s['student_name'],
                         "Grade_level": s['grade_level'],
@@ -2100,10 +2059,6 @@ def page_attendance():
                 
                 st.info(f"📝 Editing Register for: **{date_val.strftime('%B %d, %Y')}**")
                 
-                # --- FIX IS HERE ---
-                # Replaced 'use_container_width=True' with 'width="stretch"' for st.dataframe if needed, 
-                # but for data_editor specifically, we rely on default width behavior or just remove the param if strict.
-                # However, to fix your specific error log, we remove 'use_container_width' and use the layout to control width.
                 edited_df = st.data_editor(
                     df_edit,
                     column_config={
@@ -2115,8 +2070,7 @@ def page_attendance():
                         "Status": st.column_config.SelectboxColumn("Status", options=STATUS_OPTS, required=True, width="medium")
                     },
                     hide_index=True,
-                    use_container_width=True, # Keeping this IF your streamlit version supports it, otherwise remove it.
-                    # If you still see errors, DELETE the line above.
+                    use_container_width=True,
                     height=500
                 )
                 
@@ -2124,19 +2078,16 @@ def page_attendance():
                     try:
                         teacher = st.session_state.user[0]
                         timestamp = str(datetime.datetime.now())
-                        # Note: fetch_all_records is slow if DB is big. In production, filter in query.
                         current_db = fetch_all_records("Attendance")
                         
                         ids_to_update = edited_df['Student_ID'].astype(str).tolist()
                         
                         final_list = []
-                        # Optimized cleaning loop
                         for r in current_db:
                             is_same_day = (str(r.get('date')) == str(date_val))
                             is_same_sub = (r.get('subject') == selected_sub)
                             sid = str(r.get('student_id')).replace(".0","")
                             
-                            # Keep record only if it's NOT the one we are updating
                             if not (is_same_day and is_same_sub and sid in ids_to_update):
                                 final_list.append(r)
                         
@@ -2156,13 +2107,10 @@ def page_attendance():
                             
                         overwrite_sheet_data("Attendance", final_list)
                         st.success("✅ **Saved Successfully!** Resetting page...")
-                        
                         reset_daily_filters()
                         if 'att_sub_daily' in st.session_state: del st.session_state.att_sub_daily
-                        
                         time.sleep(1)
                         st.rerun()
-                        
                     except Exception as e:
                         st.error(f"Error: {e}")
 
@@ -2173,13 +2121,7 @@ def page_attendance():
         st.markdown("### 📊 Reports & Corrections")
         
         with st.container(border=True):
-            view_sub = st.selectbox(
-                "1️⃣ Select Subject", 
-                subjects, 
-                key="view_att_sub",
-                on_change=reset_report_filters
-            )
-            
+            view_sub = st.selectbox("1️⃣ Select Subject", subjects, key="view_att_sub", on_change=reset_report_filters)
             all_grades_rep = ["Select Grade..."] + sorted(df_students['grade_level'].unique().astype(str).tolist())
             all_rooms_rep = ["Select Room..."] + sorted(df_students['room'].unique().astype(str).tolist(), key=lambda x: int(x) if x.isdigit() else x)
             
@@ -2193,14 +2135,7 @@ def page_attendance():
 
         rep_ready = (view_sub != "Select Subject..." and f_grade != "Select Grade..." and f_room != "Select Room...")
 
-        if not rep_ready:
-             if view_sub == "Select Subject...":
-                 st.info("👆 Please select a **Subject**.")
-             elif f_grade == "Select Grade...":
-                st.info("👆 Now select a **Grade Level**.")
-             elif f_room == "Select Room...":
-                st.info("👆 Finally, select the **Room**.")
-        else:
+        if rep_ready:
             if st.button("Generate Report", type="primary"):
                 st.session_state.report_generated = True
             
@@ -2208,7 +2143,8 @@ def page_attendance():
                 stats = get_attendance_score_data(view_sub)
                 
                 if not stats.empty:
-                    df_info = df_students[['student_id', 'student_name', 'grade_level', 'room']].copy()
+                    # FIX 4: Ensure we bring 'class_no' into the report logic
+                    df_info = df_students[['student_id', 'student_name', 'grade_level', 'room', 'class_no']].copy()
                     df_info['student_id'] = df_info['student_id'].astype(str).str.replace(".0","").str.strip()
                     stats.index = stats.index.astype(str)
                     
@@ -2217,13 +2153,14 @@ def page_attendance():
                     full_report = full_report[full_report['grade_level'].astype(str) == f_grade]
                     full_report = full_report[full_report['room'].astype(str) == f_room]
                     
+                    # FIX 5: Sort Report by Class No as well
+                    full_report = full_report.sort_values(by="class_no")
+                    
                     if full_report.empty:
                         st.warning("No students match these filters.")
                     else:
-                        full_report.insert(0, 'No.', range(1, 1 + len(full_report)))
-                        full_report = full_report.rename(columns={'student_id': 'Student_ID', 'student_name': 'Name', 'grade_level': 'Grade_level', 'room': 'Room'})
+                        full_report = full_report.rename(columns={'class_no': 'No.', 'student_id': 'Student_ID', 'student_name': 'Name', 'grade_level': 'Grade_level', 'room': 'Room'})
                         
-                        # Fix: Replaced use_container_width with correct approach for dataframe
                         st.dataframe(
                             full_report[['No.', 'Student_ID', 'Name', 'Grade_level', 'Room', 'Present', 'Absent', 'Percentage', 'Attendance_Score_5']],
                             column_config={
@@ -2249,8 +2186,7 @@ def page_attendance():
                                     save_attendance_to_grades(full_report, view_sub, target_q, target_sy, target_col)
                 else:
                     st.info("No records found.")
-
-
+    
 # --- HELPER: SAVE FUNCTION (Paste this OUTSIDE page_attendance) ---
 def save_attendance_to_grades(report_df, subject, quarter, year, target_test):
     """
