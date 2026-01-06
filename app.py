@@ -1594,14 +1594,19 @@ def page_gradebook():
     school_years = get_school_years()
     
     # 2. Filters
-    c1,c2,c3,c4 = st.columns(4)
+    c1, c2, c3, c4, c5 = st.columns(5)
+    
     s = c1.selectbox("Subject", subjects)
     l = c2.selectbox("Level", ["M1","M2","M3","M4","M5","M6"])
     r = c3.selectbox("Room", [str(i) for i in range(1,16)])
-    q = c4.selectbox("Quarter", ["Q1","Q2","Q3","Q4"])
     
-    # Get the current school year
-    yr = school_years[1] 
+    # Updated Options to include Semester Calculations
+    view_options = ["Q1", "Q2", "Q3", "Q4", "Semester 1 Final", "Semester 2 Final", "All Quarters"]
+    q = c4.selectbox("View Grade", view_options)
+    
+    # School Year
+    default_yr_idx = 1 if len(school_years) > 1 else 0
+    yr = c5.selectbox("School Year", school_years, index=default_yr_idx)
     
     # 3. Get Student Roster
     roster = get_class_roster(l, r, only_active=True)
@@ -1610,46 +1615,92 @@ def page_gradebook():
         return
         
     data = []
-    
-    # 4. Build Table (WHOLE NUMBERS)
-    for idx, row in roster.iterrows():
-        sid = str(row['student_id'])
-        rec = get_grade_record(sid, s, q, yr)
-        
+
+    # --- HELPER: Get score as int or 0 ---
+    def get_q_score(sid, subj, qtr, year):
+        rec = get_grade_record(sid, subj, qtr, year)
         if rec:
-            t1, t2, t3, fin, tot = rec
-            # Convert to int to remove decimals
-            data.append({
-                "ID": sid,
-                "No": row['class_no'], 
-                "Name": row['student_name'], 
-                "Test 1": int(float(t1)), 
-                "Test 2": int(float(t2)), 
-                "Test 3": int(float(t3)), 
-                "Final": int(float(fin)), 
-                "Total": int(float(tot))
-            })
-        else:
-             data.append({
-                 "ID": sid,
-                 "No": row['class_no'], 
-                 "Name": row['student_name'], 
-                 "Test 1": "-", 
-                 "Test 2": "-", 
-                 "Test 3": "-", 
-                 "Final": "-", 
-                 "Total": "-"
-             })
+            return int(float(rec[4])) # Return Total Score as int
+        return 0
+
+    # --- LOGIC BRANCHES ---
     
-    # 5. Display Table WITH RED HIGHLIGHTS
+    # A. SEMESTER 1 FINAL (Q1 + Q2)
+    if q == "Semester 1 Final":
+        for idx, row in roster.iterrows():
+            sid = str(row['student_id'])
+            s1 = get_q_score(sid, s, "Q1", yr)
+            s2 = get_q_score(sid, s, "Q2", yr)
+            sem_total = s1 + s2
+            
+            data.append({
+                "ID": sid, "No": row['class_no'], "Name": row['student_name'], 
+                "Q1 (50)": s1, 
+                "Q2 (50)": s2, 
+                "Sem 1 Final (100)": sem_total
+            })
+
+    # B. SEMESTER 2 FINAL (Q3 + Q4)
+    elif q == "Semester 2 Final":
+        for idx, row in roster.iterrows():
+            sid = str(row['student_id'])
+            s3 = get_q_score(sid, s, "Q3", yr)
+            s4 = get_q_score(sid, s, "Q4", yr)
+            sem_total = s3 + s4
+            
+            data.append({
+                "ID": sid, "No": row['class_no'], "Name": row['student_name'], 
+                "Q3 (50)": s3, 
+                "Q4 (50)": s4, 
+                "Sem 2 Final (100)": sem_total
+            })
+
+    # C. ALL QUARTERS SUMMARY
+    elif q == "All Quarters":
+        for idx, row in roster.iterrows():
+            sid = str(row['student_id'])
+            # Get all scores
+            sc = [get_q_score(sid, s,qx, yr) for qx in ["Q1","Q2","Q3","Q4"]]
+            # Calculate Year Average (Simple average of the 4 totals)
+            # Or if you want (Sem1 + Sem2) / 2, it's mathematically the same as Sum/4
+            # We filter out 0s if you don't want to penalize future quarters, 
+            # BUT usually for a yearly summary, we just show what we have.
+            
+            # Note: If a quarter is missing, it counts as 0 in this logic.
+            year_total = sum(sc) 
+            year_avg = int(year_total / 4) # Simple Avg
+
+            data.append({
+                "ID": sid, "No": row['class_no'], "Name": row['student_name'], 
+                "Q1": sc[0], "Q2": sc[1], "Q3": sc[2], "Q4": sc[3], 
+                "Year Avg": year_avg
+            })
+
+    # D. SINGLE QUARTER VIEW (Detailed)
+    else:
+        for idx, row in roster.iterrows():
+            sid = str(row['student_id'])
+            rec = get_grade_record(sid, s, q, yr)
+            if rec:
+                t1, t2, t3, fin, tot = rec
+                data.append({
+                    "ID": sid, "No": row['class_no'], "Name": row['student_name'], 
+                    "Test 1": int(float(t1)), "Test 2": int(float(t2)), "Test 3": int(float(t3)), 
+                    "Final": int(float(fin)), "Total": int(float(tot))
+                })
+            else:
+                 data.append({
+                     "ID": sid, "No": row['class_no'], "Name": row['student_name'], 
+                     "Test 1": "-", "Test 2": "-", "Test 3": "-", "Final": "-", "Total": "-"
+                 })
+
+    # 5. Display Table & Styles
     if data:
         df_display = pd.DataFrame(data)
         
-        # --- STYLING LOGIC ---
-        def highlight_gradebook_fail(val, limit):
-            """Colors text red if value is less than the limit"""
+        # --- STYLING ---
+        def highlight_fail(val, limit):
             try:
-                # Handle cases where value might be "-"
                 if str(val) == "-": return ''
                 score = float(val)
                 if score < limit:
@@ -1658,34 +1709,42 @@ def page_gradebook():
                 pass
             return ''
 
-        # Apply Styles using Pandas Styler
-        # Rules: Tests < 5 | Final < 10 | Total < 25
-        styled_df = df_display.style\
-            .map(lambda x: highlight_gradebook_fail(x, 5), subset=[c for c in ['Test 1', 'Test 2', 'Test 3'] if c in df_display.columns])\
-            .map(lambda x: highlight_gradebook_fail(x, 10), subset=[c for c in ['Final'] if c in df_display.columns])\
-            .map(lambda x: highlight_gradebook_fail(x, 25), subset=[c for c in ['Total'] if c in df_display.columns])
+        # Apply specific styling based on View
+        if q == "Semester 1 Final":
+            # Q1, Q2 fail if < 25. Sem Final fail if < 50.
+            styled_df = df_display.style\
+                .map(lambda x: highlight_fail(x, 25), subset=['Q1 (50)', 'Q2 (50)'])\
+                .map(lambda x: highlight_fail(x, 50), subset=['Sem 1 Final (100)'])
+                
+        elif q == "Semester 2 Final":
+            # Q3, Q4 fail if < 25. Sem Final fail if < 50.
+            styled_df = df_display.style\
+                .map(lambda x: highlight_fail(x, 25), subset=['Q3 (50)', 'Q4 (50)'])\
+                .map(lambda x: highlight_fail(x, 50), subset=['Sem 2 Final (100)'])
+                
+        elif q == "All Quarters":
+            styled_df = df_display.style\
+                .map(lambda x: highlight_fail(x, 25), subset=['Q1', 'Q2', 'Q3', 'Q4', 'Year Avg'])
+                
+        else:
+            # Single Quarter (Tests)
+            styled_df = df_display.style\
+                .map(lambda x: highlight_fail(x, 5), subset=[c for c in ['Test 1', 'Test 2', 'Test 3'] if c in df_display.columns])\
+                .map(lambda x: highlight_fail(x, 10), subset=[c for c in ['Final'] if c in df_display.columns])\
+                .map(lambda x: highlight_fail(x, 25), subset=[c for c in ['Total'] if c in df_display.columns])
 
         st.dataframe(styled_df, hide_index=True, use_container_width=True)
         
     else:
         st.info("No data to display.")
     
-    # 6. Export to Excel (WHOLE NUMBERS & STUDENT ID INCLUDED)
+    # 6. Export to Excel
     if data:
-        export_data = []
-        for row in data:
-            export_data.append({
-                "Student ID": row["ID"], 
-                "No.": row["No"],
-                "Name": row["Name"],
-                "Test 1(10)": row["Test 1"],
-                "Test 2(10)": row["Test 2"],
-                "Test 3(10)": row["Test 3"],
-                "Final(20)": row["Final"],
-                "Total(50)": row["Total"]
-            })
-        
-        df_export = pd.DataFrame(export_data)
+        # Just use the display dataframe for export, renaming ID for clarity
+        df_export = df_display.copy()
+        if "ID" in df_export.columns:
+            df_export.rename(columns={"ID": "Student ID", "No": "No."}, inplace=True)
+            
         buffer = io.BytesIO()
         with pd.ExcelWriter(buffer, engine='xlsxwriter') as writer:
             df_export.to_excel(writer, index=False, sheet_name="Gradebook")
@@ -1693,7 +1752,7 @@ def page_gradebook():
         st.download_button(
             label="⬇️ Download Excel",
             data=buffer.getvalue(),
-            file_name=f"Gradebook_{s}_{l}_{r}_{q}.xlsx",
+            file_name=f"Gradebook_{s}_{l}_{r}_{q}_{yr}.xlsx",
             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
         )
 
