@@ -1580,7 +1580,6 @@ def page_input_grades():
                 else: st.error(msg)
             except Exception as e: st.error(f"Error: {e}")
 
-
 def page_gradebook():
     st.title("📊 Gradebook")
     
@@ -1612,25 +1611,27 @@ def page_gradebook():
         
     data = []
     
-    # 4. Build Table (WITHOUT GPA)
+    # 4. Build Table (WHOLE NUMBERS)
     for idx, row in roster.iterrows():
         sid = str(row['student_id'])
         rec = get_grade_record(sid, s, q, yr)
         
         if rec:
             t1, t2, t3, fin, tot = rec
-            # GPA Calculation Removed
+            # Convert to int to remove decimals
             data.append({
+                "ID": sid,
                 "No": row['class_no'], 
                 "Name": row['student_name'], 
-                "Test 1": fmt_score(float(t1)), 
-                "Test 2": fmt_score(float(t2)), 
-                "Test 3": fmt_score(float(t3)), 
-                "Final": fmt_score(float(fin)), 
-                "Total": fmt_score(float(tot))
+                "Test 1": int(float(t1)), 
+                "Test 2": int(float(t2)), 
+                "Test 3": int(float(t3)), 
+                "Final": int(float(fin)), 
+                "Total": int(float(tot))
             })
         else:
              data.append({
+                 "ID": sid,
                  "No": row['class_no'], 
                  "Name": row['student_name'], 
                  "Test 1": "-", 
@@ -1640,15 +1641,41 @@ def page_gradebook():
                  "Total": "-"
              })
     
-    # 5. Display Table
-    st.dataframe(pd.DataFrame(data), hide_index=True, use_container_width=True)
+    # 5. Display Table WITH RED HIGHLIGHTS
+    if data:
+        df_display = pd.DataFrame(data)
+        
+        # --- STYLING LOGIC ---
+        def highlight_gradebook_fail(val, limit):
+            """Colors text red if value is less than the limit"""
+            try:
+                # Handle cases where value might be "-"
+                if str(val) == "-": return ''
+                score = float(val)
+                if score < limit:
+                    return 'color: red; font-weight: bold;'
+            except:
+                pass
+            return ''
+
+        # Apply Styles using Pandas Styler
+        # Rules: Tests < 5 | Final < 10 | Total < 25
+        styled_df = df_display.style\
+            .map(lambda x: highlight_gradebook_fail(x, 5), subset=[c for c in ['Test 1', 'Test 2', 'Test 3'] if c in df_display.columns])\
+            .map(lambda x: highlight_gradebook_fail(x, 10), subset=[c for c in ['Final'] if c in df_display.columns])\
+            .map(lambda x: highlight_gradebook_fail(x, 25), subset=[c for c in ['Total'] if c in df_display.columns])
+
+        st.dataframe(styled_df, hide_index=True, use_container_width=True)
+        
+    else:
+        st.info("No data to display.")
     
-    # 6. Export to Excel (WITHOUT GPA)
+    # 6. Export to Excel (WHOLE NUMBERS & STUDENT ID INCLUDED)
     if data:
         export_data = []
         for row in data:
-            # We explicitly define the columns here to exclude GPA
             export_data.append({
+                "Student ID": row["ID"], 
                 "No.": row["No"],
                 "Name": row["Name"],
                 "Test 1(10)": row["Test 1"],
@@ -1669,6 +1696,7 @@ def page_gradebook():
             file_name=f"Gradebook_{s}_{l}_{r}_{q}.xlsx",
             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
         )
+
 def page_student_dashboard():
     # --- HEADER ---
     st.title(f"📊 My Attendance")
@@ -1817,23 +1845,19 @@ def page_student_record_teacher_view():
     with st.container(border=True):
         st.markdown("### 🔍 Find Student")
         
-        # A. Global Search Bar
-        search_term = st.text_input("🔎 Search by Name or ID", placeholder="Type name or ID (e.g., '1001' or 'John')...").strip()
+        # Search Bar
+        search_term = st.text_input("🔎 Search by Name or ID", placeholder="Type name or ID...").strip()
         
         df_filtered = df.copy()
         
-        # Logic: If searching, ignore dropdowns. If not searching, use dropdowns.
         if search_term:
-            # Filter by Name OR ID
             mask = (
                 df['student_name'].astype(str).str.contains(search_term, case=False) | 
                 df['student_id'].astype(str).str.contains(search_term, case=False)
             )
             df_filtered = df[mask]
             st.caption(f"Found {len(df_filtered)} matches for '{search_term}'")
-            
         else:
-            # B. Dropdown Filters (Only used if search is empty)
             all_grades = ["All Grades"] + sorted(df['grade_level'].astype(str).unique().tolist())
             all_rooms = ["All Rooms"] + sorted(df['room'].astype(str).unique().tolist())
             
@@ -1846,27 +1870,22 @@ def page_student_record_teacher_view():
             if sel_room != "All Rooms":
                 df_filtered = df_filtered[df_filtered['room'].astype(str) == sel_room]
 
-        # C. Student Selector
-        # Format list as: "Name (ID)"
+        # Student Selector
         df_filtered['display'] = df_filtered['student_name'] + " (" + df_filtered['student_id'].astype(str) + ")"
         student_opts = sorted(df_filtered['display'].tolist())
         
-        # Auto-select if only 1 match found during search
         idx = 0
-        if len(student_opts) == 1:
-            idx = 0
+        if len(student_opts) == 1: idx = 0
         
         selected_student_str = st.selectbox("Select Student Profile", student_opts, index=idx)
 
     # --- 3. DISPLAY PROFILE ---
     if selected_student_str:
-        # Extract ID
         sel_id = selected_student_str.split("(")[-1].replace(")", "")
         student_rec = df[df['student_id'].astype(str) == sel_id].iloc[0]
         
         st.markdown("---")
         
-        # LAYOUT: Photo (Left) | Details (Right)
         col_img, col_info = st.columns([1, 3])
         
         with col_img:
@@ -1883,45 +1902,68 @@ def page_student_record_teacher_view():
                 
         with col_info:
             st.subheader(f"{student_rec['student_name']}")
-            
-            # Badge Details
             b1, b2, b3 = st.columns(3)
             with b1: st.info(f"**Grade:** {student_rec['grade_level']}")
             with b2: st.info(f"**Room:** {student_rec['room']}")
             with b3: st.success(f"**Status:** {student_rec.get('status', 'Active')}")
-            
             st.write(f"**Class No:** {student_rec.get('class_no', '-')}")
             
-        # --- 4. GRADES TABLE ---
+        # --- 4. GRADES TABLE WITH RED HIGHLIGHTS ---
         st.markdown("### 📚 Academic History")
         all_grades = fetch_all_records("Grades")
-        # Filter grades for this student
         student_grades = [g for g in all_grades if str(g['student_id']).strip().replace(".0","") == str(sel_id)]
         
         if student_grades:
             df_g = pd.DataFrame(student_grades)
-            # Pick columns
+            
+            # Select relevant columns
             cols = ['subject', 'school_year', 'quarter', 'test1', 'test2', 'test3', 'final_score', 'total_score']
             cols = [c for c in cols if c in df_g.columns]
             
-            # Rename
-            rename = {'subject':'Subject', 'school_year':'Year', 'quarter':'Q', 
-                      'test1':'Test 1', 'test2':'Test 2', 'test3':'Test 3', 
-                      'final_score':'Final', 'total_score':'Total'}
+            # Force whole numbers
+            numeric_targets = ['test1', 'test2', 'test3', 'final_score', 'total_score']
+            for col in numeric_targets:
+                if col in df_g.columns:
+                    df_g[col] = pd.to_numeric(df_g[col], errors='coerce').fillna(0).astype(int)
+
+            # Rename for display
+            rename_map = {
+                'subject':'Subject', 'school_year':'Year', 'quarter':'Q', 
+                'test1':'Test 1', 'test2':'Test 2', 'test3':'Test 3', 
+                'final_score':'Final', 'total_score':'Total'
+            }
+            display_df = df_g[cols].rename(columns=rename_map)
+
+            # --- STYLING FUNCTION ---
+            def highlight_fail(val, limit):
+                """Colors text red if value is less than the limit"""
+                try:
+                    score = float(val)
+                    if score < limit:
+                        return 'color: red; font-weight: bold;'
+                except:
+                    pass
+                return ''
+
+            # Apply Styles using Pandas Styler
+            # Logic: Tests(10) fail < 5 | Final(20) fail < 10 | Total(50) fail < 25
+            styled_df = display_df.style\
+                .map(lambda x: highlight_fail(x, 5), subset=[c for c in ['Test 1', 'Test 2', 'Test 3'] if c in display_df.columns])\
+                .map(lambda x: highlight_fail(x, 10), subset=[c for c in ['Final'] if c in display_df.columns])\
+                .map(lambda x: highlight_fail(x, 25), subset=[c for c in ['Total'] if c in display_df.columns])
             
-            st.dataframe(df_g[cols].rename(columns=rename), use_container_width=True, hide_index=True)
+            st.dataframe(styled_df, use_container_width=True, hide_index=True)
+
         else:
             st.caption("No grades recorded yet.")
             
-        # --- 5. ATTENDANCE SUMMARY ---
+        # --- 5. ATTENDANCE ---
         st.markdown("### 📅 Attendance Overview")
         all_att = fetch_all_records("Attendance")
         my_att = [r for r in all_att if str(r.get('student_id','')).strip().replace(".0","") == str(sel_id)]
         
         if my_att:
             df_a = pd.DataFrame(my_att)
-            # Simple counts
-            # Normalize keys to handle "🟢 Present" vs "Present"
             s = df_a['status'].astype(str)
             n_pres = s.str.contains("Present|🟢").sum()
             n_abs  = s.str.contains("Absent|🔴").sum()
