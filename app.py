@@ -230,23 +230,75 @@ def fetch_all_records_local_fallback(sheet_name):
         return df.fillna("").to_dict('records')
     except: return []
 
-def perform_login_sync():
-    if is_online():
-        try:
-            sh = get_cloud_connection()
-            if not sh: return False
-            conn = sqlite3.connect(LOCAL_DB)
-            sheets = ["Users", "Subjects", "Students", "Grades", "Tasks", "Config"]
-            for s in sheets:
-                try:
-                    data = sh.worksheet(s).get_all_records()
-                    if data:
-                        df = pd.DataFrame(data)
-                        df.to_sql(s, conn, if_exists='replace', index=False)
-                except: pass
+def sync_table_with_cloud(sheet_name, primary_key_column):
+    """
+    NEW HELPER: Merges local and online datasets securely using timestamps.
+    """
+    if not is_online():
+        return False
+    try:
+        sh = get_cloud_connection()
+        if not sh: return False
+        conn = sqlite3.connect(LOCAL_DB)
+        
+        # Pull your Mac's offline data
+        df_local = pd.read_sql(f"SELECT * FROM {sheet_name}", conn)
+        
+        # Pull the current cloud data
+        worksheet = sh.worksheet(sheet_name)
+        online_records = worksheet.get_all_records()
+        df_online = pd.DataFrame(online_records)
+        
+        if df_local.empty and df_online.empty:
             conn.close()
             return True
-        except: return False
+            
+        # Combine both datasets side by side
+        df_combined = pd.concat([df_online, df_local], ignore_index=True)
+        
+        # Sort them using the timestamp column from old to new
+        if 'timestamp' in df_combined.columns:
+            df_combined['timestamp'] = df_combined['timestamp'].astype(str)
+            df_combined = df_combined.sort_values(by='timestamp', ascending=True)
+            
+        # Drop duplicates, keeping the item at the bottom (the newest timestamp)
+        df_combined = df_combined.drop_duplicates(subset=[primary_key_column], keep='last')
+        
+        # Update your local Mac database safely
+        df_combined.to_sql(sheet_name, conn, if_exists='replace', index=False)
+        conn.close()
+        
+        # Cleanly upload the combined results back to your Google Sheet without wiping anything else
+        if len(df_combined) > 0:
+            headers = df_combined.columns.values.tolist()
+            rows = [headers] + df_combined.fillna("").values.tolist()
+            worksheet.clear()
+            worksheet.append_rows(rows)
+        else:
+            worksheet.clear()
+        return True
+    except Exception as e:
+        print(f"Sync error for {sheet_name}: {e}")
+        return False
+
+def perform_login_sync():
+    """
+    UPDATED: Now runs a secure merge on login instead of blindly wiping your database!
+    """
+    if is_online():
+        # Match each sheet with its exact primary identifying key
+        keys = {
+            "Users": "username",
+            "Subjects": "id",
+            "Students": "student_id",
+            "Grades": "id",
+            "Tasks": "uid",
+            "Config": "uid",
+            "Attendance": "uid"
+        }
+        for s, primary_key in keys.items():
+            sync_table_with_cloud(s, primary_key)
+        return True
     return False
 
 def overwrite_sheet_data(sheet_name, data_list_of_dicts):
@@ -276,6 +328,8 @@ def overwrite_sheet_data(sheet_name, data_list_of_dicts):
 
 def clear_cache():
     st.cache_data.clear()
+
+
 
 # --- HELPER FUNCTIONS ---
 def get_school_years():
@@ -542,6 +596,27 @@ def save_final_exam_batch(subject, quarter, year, grade_df, max_score, teacher):
     clear_cache()
     return True
 
+def graduate_class_roster(level, room, all_rooms=False):
+    """
+    Sets the status of all active students in the selected class group to 'Graduate'.
+    If all_rooms is True, it automatically applies to ALL rooms within that Grade Level.
+    """
+    studs = fetch_all_records("Students")
+    c = 0
+    for s in studs:
+        match_level = (s['grade_level'] == level)
+        match_room = True if all_rooms else (str(s['room']) == str(room))
+        
+        if match_level and match_room and s.get('status') == 'Active':
+            s['status'] = "Graduate"
+            c += 1
+            
+    overwrite_sheet_data("Students", studs)
+    clear_cache()
+    group_name = f"all {level} classes" if all_rooms else f"{level}/{room}"
+    return True, f"Successfully graduated {c} students from {group_name}!"
+
+
 # --- LOGIC ---
 def login_staff(username, password):
     records = fetch_all_records("Users")
@@ -770,6 +845,7 @@ def admin_restore_student(s_id):
     overwrite_sheet_data("Students", studs)
     clear_cache()
     return True
+
 
 def admin_reset_student_password(s_id, new_pass):
     studs = fetch_all_records("Students")
@@ -1179,16 +1255,54 @@ def page_roster():
     with c1: level = st.selectbox("Level", ["M1","M2","M3","M4","M5","M6"])
     with c2: room = st.selectbox("Room", [str(i) for i in range(1,16)])
     
-    t1, t2, t3, t4 = st.tabs(["📋 Class List", "➕ Add / Upload", "✏️ Edit / Transfer", "🔍 Search All"])
+    # ADDED THE 5TH TAB HERE
+    t1, t2, t3, t4, t5 = st.tabs(["📋 Class List", "➕ Add / Upload", "✏️ Edit / Transfer", "🔍 Search All", "🎓 Graduation"])
     
     with t1:
         curr = get_class_roster(level, room, only_active=False)
         if not curr.empty:
-            def highlight_status(val):
-                if val == 'Active': return 'color: green; font-weight: bold'
-                if val == 'Deleted': return 'color: gray; text-decoration: line-through'
-                return 'color: red; font-weight: bold'
-            st.dataframe(curr[['class_no','student_id','student_name', 'status']].style.map(highlight_status, subset=['status']), hide_index=True, width="stretch")
+            df_display = curr[['class_no', 'student_id', 'student_name', 'status']].copy()
+            
+            # Create an interactive data editor inside a form for efficient saving
+            with st.form("status_editor_form"):
+                edited_df = st.data_editor(
+                    df_display,
+                    column_config={
+                        "status": st.column_config.SelectboxColumn(
+                            "Status",
+                            help="Click to change student status",
+                            options=["Active", "Transferred", "Dropped Out", "Graduate", "Deleted"],
+                            required=True
+                        )
+                    },
+                    disabled=["class_no", "student_id", "student_name"],  # Only status is editable
+                    hide_index=True,
+                    width="stretch"
+                )
+                
+                submit_changes = st.form_submit_button("💾 Save Status Changes", type="primary")
+                
+            if submit_changes:
+                updated_count = 0
+                for idx in range(len(df_display)):
+                    old_status = df_display.iloc[idx]['status']
+                    new_status = edited_df.iloc[idx]['status']
+                    
+                    # If the status was modified, update it in the database
+                    if old_status != new_status:
+                        s_id = df_display.iloc[idx]['student_id']
+                        s_name = df_display.iloc[idx]['student_name']
+                        s_no = df_display.iloc[idx]['class_no']
+                        
+                        update_student_details(s_id, s_name, int(s_no), new_status)
+                        updated_count += 1
+                
+                if updated_count > 0:
+                    st.success(f"✅ Successfully updated status for {updated_count} student(s)!")
+                    time.sleep(1)
+                    st.rerun()
+                else:
+                    st.info("No changes were detected.")
         else:
             st.info("This class is empty.")
 
@@ -1212,14 +1326,74 @@ def page_roster():
             csv = pd.DataFrame({"ID":["10101","10102"], "Name":["Student A","Student B"]}).to_csv(index=False).encode('utf-8')
             st.download_button("⬇️ Template", csv, "template.csv", "text/csv")
             up_file = st.file_uploader("Excel/CSV", type=['xlsx','csv'], key="roster_uploader")
+            
             if up_file and st.button("Upload File"):
                 try:
+                    # Read Excel or CSV file data
                     df = pd.read_csv(up_file) if up_file.name.endswith('.csv') else pd.read_excel(up_file)
-                    ok, msg, errs = upload_roster(df, level, room)
-                    if ok: st.success(msg)
-                    if errs: st.error(f"{len(errs)} Errors: " + ", ".join(errs[:5]) + "...")
-                    time.sleep(1.5); st.rerun()
-                except Exception as e: st.error(str(e))
+                    
+                    # Handle header naming variations automatically
+                    if 'student_id' in df.columns: df = df.rename(columns={'student_id': 'ID'})
+                    if 'student_name' in df.columns: df = df.rename(columns={'student_name': 'Name'})
+                    
+                    if 'ID' not in df.columns or 'Name' not in df.columns:
+                        st.error("❌ Invalid file structure. The columns must be named 'ID' and 'Name'.")
+                    else:
+                        # Fetch the current absolute student state across the system
+                        all_students = fetch_all_records("Students")
+                        student_dict = {}
+                        for s in all_students:
+                            sid = str(s.get('student_id', '')).replace(".0", "").strip()
+                            if sid:
+                                student_dict[sid] = s
+                        
+                        added_count = 0
+                        updated_count = 0
+                        
+                        # CRITICAL IMPROVEMENT: Start sequential counter at 1 for the 1st name in the spreadsheet
+                        assigned_class_no = 1
+                        
+                        for _, row in df.iterrows():
+                            raw_id = str(row['ID']).replace(".0", "").strip()
+                            raw_name = str(row['Name']).strip()
+                            
+                            # Skip row safely if it contains blank data
+                            if not raw_id or raw_id == "nan" or not raw_name or raw_name == "nan":
+                                continue
+                            
+                            if raw_id in student_dict:
+                                # Update existing demographics & reassign class number positioning based on Excel index order
+                                student_dict[raw_id]['student_name'] = raw_name
+                                student_dict[raw_id]['status'] = 'Active'
+                                student_dict[raw_id]['grade_level'] = level
+                                student_dict[raw_id]['room'] = room
+                                student_dict[raw_id]['class_no'] = assigned_class_no
+                                updated_count += 1
+                            else:
+                                # Create a completely new system profile row item configuration
+                                student_dict[raw_id] = {
+                                    "student_id": raw_id,
+                                    "student_name": raw_name,
+                                    "class_no": assigned_class_no,
+                                    "grade_level": level,
+                                    "room": room,
+                                    "photo": "",
+                                    "password": "password123",
+                                    "status": "Active"
+                                }
+                                added_count += 1
+                            
+                            # Move systematically to the next index slot (1, 2, 3... 36)
+                            assigned_class_no += 1
+                        
+                        # Overwrite the updated records state matrix securely
+                        overwrite_sheet_data("Students", list(student_dict.values()))
+                        
+                        st.success(f"📋 **Bulk processing complete!** Processed {assigned_class_no - 1} entries sequence-mapped directly from file order. ({added_count} brand-new profiles created, {updated_count} existing profiles dynamically synchronized).")
+                        time.sleep(2)
+                        st.rerun()
+                except Exception as e: 
+                    st.error(f"Upload Failure: {str(e)}")
     
     with t3:
         st.markdown("### Edit & Transfer")
@@ -1255,6 +1429,33 @@ def page_roster():
             all_studs = get_all_students_admin(include_deleted=True)
             results = all_studs[all_studs['student_name'].str.contains(search_term, case=False) | all_studs['student_id'].astype(str).str.contains(search_term)]
             st.dataframe(results[['student_id', 'student_name', 'grade_level', 'room', 'status']], hide_index=True, width="stretch")
+
+    with t5:
+        st.markdown("### 🎓 Bulk Graduation Tool")
+        st.write(f"Instantly switch active students to **Graduate** status for school departures.")
+        
+        roster_all = get_class_roster(level, room, only_active=False)
+        if not roster_all.empty:
+            active_grad_studs = roster_all[roster_all['status'] == 'Active']
+            
+            if not active_grad_studs.empty:
+                st.info(f"There are currently **{len(active_grad_studs)}** Active students in **{level}/{room}** ready for graduation.")
+                st.dataframe(active_grad_studs[['class_no','student_id','student_name', 'status']], hide_index=True, width="stretch")
+                
+                c_g1, c_g2 = st.columns(2)
+                with c_g1:
+                    if st.button(f"🎓 Graduate Just Room {room} ({level}/{room})", type="primary", use_container_width=True):
+                        ok, msg = graduate_class_roster(level, room, all_rooms=False)
+                        if ok: st.success(msg); time.sleep(1.5); st.rerun()
+                with c_g2:
+                    if st.button(f"🎓 Graduate ALL {level} Classes (Rooms 1-15)", use_container_width=True):
+                        ok, msg = graduate_class_roster(level, room, all_rooms=True)
+                        if ok: st.success(msg); time.sleep(1.5); st.rerun()
+            else:
+                st.success(f"🎉 No active students found in {level}/{room}. They might already be marked as Graduate!")
+        else:
+            st.info("This class group has no student profiles loaded.")
+
 def page_input_grades():
     st.title("📝 Input Grades")
     st.markdown("Record and manage student scores for tests and exams.")
@@ -1755,7 +1956,6 @@ def page_gradebook():
             file_name=f"Gradebook_{s}_{l}_{r}_{q}_{yr}.xlsx",
             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
         )
-
 def page_student_dashboard():
     # --- HEADER ---
     st.title(f"📊 My Attendance")
@@ -1886,6 +2086,7 @@ def page_student_dashboard():
                 hide_index=True,
                 height=300
             )
+
 def page_student_record_teacher_view():
     st.title("👤 Student Record & Academic History")
     
@@ -1897,8 +2098,9 @@ def page_student_record_teacher_view():
         st.warning("No students found in database.")
         return
         
+    # CRITICAL FIX: Only show active students (excludes graduated and deleted profiles)
     if 'status' in df.columns:
-        df = df[df['status'] != 'Deleted']
+        df = df[df['status'] == 'Active']
     
     # --- 2. SEARCH & FILTER SECTION ---
     with st.container(border=True):
@@ -1915,7 +2117,7 @@ def page_student_record_teacher_view():
                 df['student_id'].astype(str).str.contains(search_term, case=False)
             )
             df_filtered = df[mask]
-            st.caption(f"Found {len(df_filtered)} matches for '{search_term}'")
+            st.caption(f"Found {len(df_filtered)} active matches for '{search_term}'")
         else:
             all_grades = ["All Grades"] + sorted(df['grade_level'].astype(str).unique().tolist())
             all_rooms = ["All Rooms"] + sorted(df['room'].astype(str).unique().tolist())
@@ -2005,7 +2207,6 @@ def page_student_record_teacher_view():
                 return ''
 
             # Apply Styles using Pandas Styler
-            # Logic: Tests(10) fail < 5 | Final(20) fail < 10 | Total(50) fail < 25
             styled_df = display_df.style\
                 .map(lambda x: highlight_fail(x, 5), subset=[c for c in ['Test 1', 'Test 2', 'Test 3'] if c in display_df.columns])\
                 .map(lambda x: highlight_fail(x, 10), subset=[c for c in ['Final'] if c in display_df.columns])\
@@ -2055,11 +2256,11 @@ def page_attendance():
     students_data = fetch_all_records("Students")
     df_students = pd.DataFrame(students_data)
     
-    # Ensure active students only
+    # CRITICAL FIX: Explicitly keep ONLY active students right from the fetch phase
     if not df_students.empty and 'status' in df_students.columns:
-        df_students = df_students[df_students['status'] != 'Deleted']
+        df_students = df_students[df_students['status'] == 'Active']
     
-    # --- CRITICAL FIX: ENSURE CLASS_NO IS NUMERIC FOR SORTING ---
+    # --- ENSURE CLASS_NO IS NUMERIC FOR SORTING ---
     if not df_students.empty and 'class_no' in df_students.columns:
         df_students['class_no'] = pd.to_numeric(df_students['class_no'], errors='coerce').fillna(999).astype(int)
 
@@ -2078,9 +2279,19 @@ def page_attendance():
     # ==========================================
     with tab1:
         st.markdown("### 📅 Daily Class Register")
-        st.caption("Follow the steps in order to unlock the class list.")
         
-        with st.container(border=True):
+        # --- LOOKAHEAD STATE FOR AUTO-HIDE CONTROL ---
+        sub_state = st.session_state.get("att_sub_daily", "Select Subject...")
+        grade_state = st.session_state.get("daily_grade", "Select Grade...")
+        room_state = st.session_state.get("daily_room", "Select Room...")
+        
+        filters_complete_check = (sub_state != "Select Subject..." and grade_state != "Select Grade..." and room_state != "Select Room...")
+        
+        # Header text adjusts based on whether filters are configured
+        expander_title = f"⚙️ Active Filter: {sub_state} | Class: {grade_state}/{room_state} (Click to open/modify)" if filters_complete_check else "🔍 Step 1-3: Select Class Filters"
+        
+        # Expander auto-collapses (expanded=False) once filters are active
+        with st.expander(expander_title, expanded=not filters_complete_check):
             # STEP 1: SUBJECT & DATE
             c1, c2 = st.columns(2)
             with c1: 
@@ -2093,16 +2304,12 @@ def page_attendance():
             # STEP 2 & 3: GRADE & ROOM
             unique_grades = sorted(df_students['grade_level'].unique().astype(str).tolist())
             all_grades = ["Select Grade..."] + unique_grades
-            
-            # Simple room sort (converts "1" to integer 1 so it sorts correctly)
             all_rooms = ["Select Room..."] + sorted(df_students['room'].unique().astype(str).tolist(), key=lambda x: int(x) if x.isdigit() else x)
 
-            f1, f2, f3 = st.columns([1, 1, 2])
-            
+            f1, f2 = st.columns(2)
             with f1:
                 grade_disabled = (selected_sub == "Select Subject...")
                 sel_grade = st.selectbox("2️⃣ Filter Grade", all_grades, key="daily_grade", disabled=grade_disabled)
-            
             with f2:
                 room_disabled = (sel_grade == "Select Grade...")
                 sel_room = st.selectbox("3️⃣ Filter Room", all_rooms, key="daily_room", disabled=room_disabled)
@@ -2112,19 +2319,15 @@ def page_attendance():
         
         if not filters_complete:
             if selected_sub == "Select Subject...":
-                st.info("👆 Please start by selecting a **Subject**.")
+                st.info("👆 Please open the configuration filter above and select a **Subject** to begin.")
         else:
-            # 3. SHOW DATA - CORRECTED SORTING
             mask = (df_students['grade_level'].astype(str) == sel_grade) & (df_students['room'].astype(str) == sel_room)
             
-            # FIX 1: Sort by 'class_no' so it matches Input Grades
+            # Sort active students by class_no
             df_filtered = df_students[mask].sort_values(by=["class_no"])
 
-            with f3:
-                st.success(f"**✅ Class Loaded:** {len(df_filtered)} students")
-
             if df_filtered.empty:
-                st.warning("⚠️ No students found in this Grade/Room.")
+                st.warning("⚠️ No active students found in this Grade/Room.")
             else:
                 existing_map = {}
                 if not df_att.empty:
@@ -2135,12 +2338,10 @@ def page_attendance():
                 editor_rows = []
                 STATUS_OPTS = ["🟢 Present", "🔴 Absent", "🟡 Late", "⚪ Excused"]
                 
-                # FIX 2: Loop through the SORTED list
                 for _, s in df_filtered.iterrows():
                     sid = str(s['student_id']).replace(".0","")
                     current_status = existing_map.get(sid, "Present")
                     
-                    # Normalization logic
                     if "Present" in current_status and "🟢" not in current_status: disp_status = "🟢 Present"
                     elif "Absent" in current_status and "🔴" not in current_status: disp_status = "🔴 Absent"
                     elif "Late" in current_status and "🟡" not in current_status: disp_status = "🟡 Late"
@@ -2148,7 +2349,7 @@ def page_attendance():
                     else: disp_status = current_status
 
                     editor_rows.append({
-                        "No.": s['class_no'],  # FIX 3: Use actual Class No from DB
+                        "No.": s['class_no'],  
                         "Student_ID": sid,
                         "Name": s['student_name'],
                         "Grade_level": s['grade_level'],
@@ -2158,7 +2359,8 @@ def page_attendance():
                 
                 df_edit = pd.DataFrame(editor_rows)
                 
-                st.info(f"📝 Editing Register for: **{date_val.strftime('%B %d, %Y')}**")
+                # --- VISIBLE DISPLAY INFORMATION BAR ---
+                st.success(f"**📋 Loaded Class:** {len(df_filtered)} Active Students for **{sel_grade}/{sel_room}** | Date: **{date_val.strftime('%B %d, %Y')}**")
                 
                 edited_df = st.data_editor(
                     df_edit,
@@ -2172,7 +2374,7 @@ def page_attendance():
                     },
                     hide_index=True,
                     use_container_width=True,
-                    height=500
+                    height=1100
                 )
                 
                 if st.button("💾 Save Attendance & Reset", type="primary", use_container_width=True):
@@ -2233,61 +2435,104 @@ def page_attendance():
             with rc2:
                 r_rep_disabled = (f_grade == "Select Grade...")
                 f_room = st.selectbox("3️⃣ Filter Room", all_rooms_rep, key="rep_room", disabled=r_rep_disabled)
+            
+            # --- NEW FEATURE: DATE RANGE SELECTOR ---
+            st.markdown("**🗓️ Select Date Range Filter:**")
+            d_col1, d_col2 = st.columns(2)
+            
+            # Set default example dates (e.g., May 1st to July 31st of current year)
+            current_year = datetime.date.today().year
+            default_start = datetime.date(current_year, 5, 1)
+            default_end = datetime.date(current_year, 7, 31)
+            
+            with d_col1:
+                start_date = st.date_input("Start Date", default_start, key="rep_start_date")
+            with d_col2:
+                end_date = st.date_input("End Date", default_end, key="rep_end_date")
 
         rep_ready = (view_sub != "Select Subject..." and f_grade != "Select Grade..." and f_room != "Select Room...")
 
         if rep_ready:
-            if st.button("Generate Report", type="primary"):
+            if st.button("Generate Report", type="primary", use_container_width=True):
                 st.session_state.report_generated = True
             
             if st.session_state.get('report_generated', False):
-                stats = get_attendance_score_data(view_sub)
-                
-                if not stats.empty:
-                    # FIX 4: Ensure we bring 'class_no' into the report logic
-                    df_info = df_students[['student_id', 'student_name', 'grade_level', 'room', 'class_no']].copy()
-                    df_info['student_id'] = df_info['student_id'].astype(str).str.replace(".0","").str.strip()
-                    stats.index = stats.index.astype(str)
+                if not df_att.empty:
+                    # Parse dates carefully to match string or datetime formats
+                    df_att_copy = df_att.copy()
+                    df_att_copy['parsed_date'] = pd.to_datetime(df_att_copy['date'], errors='coerce').dt.date
                     
-                    full_report = pd.merge(df_info, stats, left_on="student_id", right_index=True, how="right")
+                    # Filter database by requested range, subject, grade, and room parameters
+                    date_mask = (
+                        (df_att_copy['parsed_date'] >= start_date) & 
+                        (df_att_copy['parsed_date'] <= end_date) & 
+                        (df_att_copy['subject'] == view_sub)
+                    )
+                    df_filtered_att = df_att_copy[date_mask]
                     
-                    full_report = full_report[full_report['grade_level'].astype(str) == f_grade]
-                    full_report = full_report[full_report['room'].astype(str) == f_room]
+                    # Get target students list
+                    df_filtered_students = df_students[
+                        (df_students['grade_level'].astype(str) == f_grade) & 
+                        (df_students['room'].astype(str) == f_room)
+                    ].copy()
                     
-                    # FIX 5: Sort Report by Class No as well
-                    full_report = full_report.sort_values(by="class_no")
-                    
-                    if full_report.empty:
-                        st.warning("No students match these filters.")
+                    if df_filtered_students.empty:
+                        st.warning("No active students match these filters.")
                     else:
-                        full_report = full_report.rename(columns={'class_no': 'No.', 'student_id': 'Student_ID', 'student_name': 'Name', 'grade_level': 'Grade_level', 'room': 'Room'})
+                        # Clean ID formatting to prevent join issues
+                        df_filtered_students['student_id'] = df_filtered_students['student_id'].astype(str).str.replace(".0", "", regex=False).str.strip()
+                        
+                        report_rows = []
+                        for _, s in df_filtered_students.sort_values(by="class_no").iterrows():
+                            sid = s['student_id']
+                            
+                            # Filter attendance events belonging specifically to this student
+                            st_records = df_filtered_att[df_filtered_att['student_id'].astype(str).str.replace(".0", "", regex=False).str.strip() == sid]
+                            
+                            # Count unique structural codes 
+                            total_days = len(st_records)
+                            presents = len(st_records[st_records['status'].str.lower().str.contains('present', na=False)])
+                            absents = len(st_records[st_records['status'].str.lower().str.contains('absent', na=False)])
+                            lates = len(st_records[st_records['status'].str.lower().str.contains('late', na=False)])
+                            excused = len(st_records[st_records['status'].str.lower().str.contains('excused', na=False)])
+                            
+                            # Standard percentage algorithm (Presents / Total Configured Record Periods)
+                            pct = (presents / total_days * 100) if total_days > 0 else 100.0
+                            score_5 = (pct / 100) * 5
+                            
+                            report_rows.append({
+                                "No.": s['class_no'],
+                                "Student_ID": sid,
+                                "Name": s['student_name'],
+                                "Grade_level": s['grade_level'],
+                                "Room": s['room'],
+                                "Present": presents,
+                                "Absent": absents,
+                                "Late": lates,
+                                "Excused": excused,
+                                "Total Days": total_days,
+                                "Percentage": f"{pct:.2f}%",
+                                "Attendance_Score_5": score_5
+                            })
+                            
+                        full_report = pd.DataFrame(report_rows)
+                        
+                        st.info(f"📊 Displaying attendance summary from **{start_date.strftime('%B %d, %Y')}** to **{end_date.strftime('%B %d, %Y')}**")
                         
                         st.dataframe(
-                            full_report[['No.', 'Student_ID', 'Name', 'Grade_level', 'Room', 'Present', 'Absent', 'Percentage', 'Attendance_Score_5']],
+                            full_report[['No.', 'Student_ID', 'Name', 'Grade_level', 'Room', 'Present', 'Absent', 'Late', 'Excused', 'Total Days', 'Percentage', 'Attendance_Score_5']],
                             column_config={
                                 "No.": st.column_config.NumberColumn("No.", width="small"),
                                 "Student_ID": st.column_config.TextColumn("ID", width="small"),
-                                "Attendance_Score_5": st.column_config.ProgressColumn("Score", format="%.2f", min_value=0, max_value=5),
+                                "Attendance_Score_5": st.column_config.ProgressColumn("Score (Out of 5)", format="%.2f", min_value=0, max_value=5),
                             },
                             use_container_width=True, 
                             hide_index=True
                         )
-                        
-                        st.markdown("---")
-                        st.markdown("### 📤 Export")
-                        with st.container(border=True):
-                            e1, e2, e3 = st.columns([1, 1, 1])
-                            with e1: target_col = st.selectbox("Save to:", ["Select...", "Test 1", "Test 2", "Test 3"])
-                            with e2: target_q = st.selectbox("Quarter", ["Q1", "Q2", "Q3", "Q4"])
-                            with e3: target_sy = st.selectbox("School Year", get_school_years(), index=1)
-                            
-                            if target_col != "Select...":
-                                if st.button(f"💾 Save to {target_col}", type="primary"):
-                                    full_report['student_id'] = full_report['Student_ID'] 
-                                    save_attendance_to_grades(full_report, view_sub, target_q, target_sy, target_col)
                 else:
-                    st.info("No records found.")
-    
+                    st.info("No database history records found.")
+
+
 # --- HELPER: SAVE FUNCTION (Paste this OUTSIDE page_attendance) ---
 def save_attendance_to_grades(report_df, subject, quarter, year, target_test):
     """
